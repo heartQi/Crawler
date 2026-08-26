@@ -15,6 +15,7 @@ from typing import List
 
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
+from tkinter import font as tkfont
 
 from .config import (
     PLATFORMS, CITIES, CRAWL_OK, CRAWL_BLOCKED,
@@ -23,7 +24,6 @@ from .config import (
 from .models import CompanyInfo
 from .auth import Credentials
 from .engine import CrawlerEngine
-
 
 
 class CrawlerApp:
@@ -60,7 +60,34 @@ class CrawlerApp:
         self.root.geometry(f"1100x720+{x}+{y}")
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
+        self._init_fonts()
+        self._setup_styles()
         self._build_ui()
+
+    def _init_fonts(self):
+        self.FONT_BOLD_18 = tkfont.Font(family="Microsoft YaHei", size=18, weight="bold")
+        self.FONT_BOLD_14 = tkfont.Font(family="Microsoft YaHei", size=14, weight="bold")
+        self.FONT_BOLD_13 = tkfont.Font(family="Microsoft YaHei", size=13, weight="bold")
+        self.FONT_BOLD_12 = tkfont.Font(family="Microsoft YaHei", size=12, weight="bold")
+        self.FONT_BOLD_11 = tkfont.Font(family="Microsoft YaHei", size=11, weight="bold")
+        self.FONT_BOLD_10 = tkfont.Font(family="Microsoft YaHei", size=10, weight="bold")
+        self.FONT_13 = tkfont.Font(family="Microsoft YaHei", size=13)
+        self.FONT_12 = tkfont.Font(family="Microsoft YaHei", size=12)
+        self.FONT_11 = tkfont.Font(family="Microsoft YaHei", size=11)
+        self.FONT_10 = tkfont.Font(family="Microsoft YaHei", size=10)
+
+    def _setup_styles(self):
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure("Treeview",
+                        background=CARD_BG, fieldbackground=CARD_BG,
+                        font=self.FONT_11, rowheight=30)
+        style.configure("Treeview.Heading",
+                        font=self.FONT_BOLD_11,
+                        background="#E8EEF4", foreground=TEXT_DARK)
+        style.map("Treeview",
+                  background=[("selected", "#D5E8FF")],
+                  foreground=[("selected", PRIMARY)])
 
     # ──────────── UI 构建 ────────────
 
@@ -70,32 +97,33 @@ class CrawlerApp:
         self._build_result_area()
         self._build_footer()
 
+    def _make_label(self, parent, **kw):
+        return tk.Label(parent, **kw)
+
     def _build_header(self):
         header = tk.Frame(self.root, bg=PRIMARY, height=56)
         header.pack(fill=tk.X)
         header.pack_propagate(False)
 
-        tk.Label(
+        self._make_label(
             header, text="招聘平台公司信息爬虫",
-            font=("Microsoft YaHei", 18, "bold"),
-            bg=PRIMARY, fg="white",
+            font=self.FONT_BOLD_18, bg=PRIMARY, fg="white",
         ).pack(side=tk.LEFT, padx=20, pady=12)
 
-        self.status_label = tk.Label(
+        self.status_label = self._make_label(
             header, text="就绪",
-            font=("Microsoft YaHei", 12),
-            bg=PRIMARY, fg="#D5E8FF",
+            font=self.FONT_12, bg=PRIMARY, fg="#D5E8FF",
         )
         self.status_label.pack(side=tk.RIGHT, padx=20)
 
     def _build_control_panel(self):
-        panel = tk.Frame(self.root, bg=CARD_BG, relief=tk.FLAT)
+        panel = tk.Frame(self.root, bg=CARD_BG)
         panel.pack(fill=tk.X, padx=16, pady=(12, 4))
 
         # ── 平台选择 ──
         pf = tk.LabelFrame(
             panel, text="选择平台",
-            font=("Microsoft YaHei", 12, "bold"),
+            font=self.FONT_BOLD_12,
             bg=CARD_BG, fg=TEXT_DARK, padx=10, pady=8,
         )
         pf.pack(fill=tk.X, padx=12, pady=(10, 4))
@@ -105,14 +133,14 @@ class CrawlerApp:
             self.platform_vars[key] = var
             cb = tk.Checkbutton(
                 pf, text=info["name"], variable=var,
-                font=("Microsoft YaHei", 12), bg=CARD_BG,
+                font=self.FONT_12, bg=CARD_BG,
                 activebackground=CARD_BG, selectcolor=CARD_BG,
                 fg=info["color"],
             )
             cb.pack(side=tk.LEFT, padx=(0, 18))
             if key == "boss" and info.get("requires_login"):
-                self._boss_login_label = tk.Label(
-                    pf, text="需登录", font=("Microsoft YaHei", 10, "bold"),
+                self._boss_login_label = self._make_label(
+                    pf, text="需登录", font=self.FONT_BOLD_10,
                     fg="#E67E22", bg=CARD_BG, cursor="hand2",
                 )
                 self._boss_login_label.pack(side=tk.LEFT, padx=(0, 18))
@@ -120,13 +148,15 @@ class CrawlerApp:
                     "<Button-1>", lambda e: self._open_login_settings()
                 )
 
+        btn_frame = tk.Frame(pf, bg=CARD_BG)
+        btn_frame.pack(side=tk.LEFT)
         tk.Button(
-            pf, text="全选", font=("Microsoft YaHei", 10),
+            btn_frame, text="全选", font=self.FONT_10,
             command=self._select_all, bg="#EBF5FB", relief=tk.FLAT,
             cursor="hand2",
         ).pack(side=tk.LEFT, padx=(10, 2))
         tk.Button(
-            pf, text="全不选", font=("Microsoft YaHei", 10),
+            btn_frame, text="全不选", font=self.FONT_10,
             command=self._deselect_all, bg="#EBF5FB", relief=tk.FLAT,
             cursor="hand2",
         ).pack(side=tk.LEFT, padx=2)
@@ -135,13 +165,13 @@ class CrawlerApp:
         sf = tk.Frame(panel, bg=CARD_BG)
         sf.pack(fill=tk.X, padx=12, pady=(6, 10))
 
-        tk.Label(
-            sf, text="搜索关键词：", font=("Microsoft YaHei", 12),
+        self._make_label(
+            sf, text="搜索关键词：", font=self.FONT_12,
             bg=CARD_BG, fg=TEXT_DARK,
         ).pack(side=tk.LEFT)
 
         self.keyword_entry = tk.Entry(
-            sf, font=("Microsoft YaHei", 13), width=28,
+            sf, font=self.FONT_13, width=28,
             relief=tk.SOLID, bd=1, fg=self.PLACEHOLDER_FG,
         )
         self.keyword_entry.insert(0, self.PLACEHOLDER_TEXT)
@@ -150,8 +180,8 @@ class CrawlerApp:
         self.keyword_entry.bind("<FocusOut>", self._on_focus_out)
         self.keyword_entry.bind("<Return>", lambda e: self._start_crawl())
 
-        tk.Label(
-            sf, text="地区：", font=("Microsoft YaHei", 12),
+        self._make_label(
+            sf, text="地区：", font=self.FONT_12,
             bg=CARD_BG, fg=TEXT_DARK,
         ).pack(side=tk.LEFT)
 
@@ -159,12 +189,12 @@ class CrawlerApp:
         self.city_var = tk.StringVar(value="北京")
         self.city_combo = ttk.Combobox(
             sf, textvariable=self.city_var, values=self.city_names,
-            font=("Microsoft YaHei", 12), width=6, state="readonly",
+            font=self.FONT_12, width=6, state="readonly",
         )
         self.city_combo.pack(side=tk.LEFT, padx=(4, 12))
 
         self.crawl_btn = tk.Button(
-            sf, text="开始爬取", font=("Microsoft YaHei", 13, "bold"),
+            sf, text="开始爬取", font=self.FONT_BOLD_13,
             bg=PRIMARY, fg="white", activebackground="#3A7BC8",
             relief=tk.FLAT, padx=20, pady=4, cursor="hand2",
             command=self._start_crawl,
@@ -172,7 +202,7 @@ class CrawlerApp:
         self.crawl_btn.pack(side=tk.LEFT, padx=(0, 8))
 
         self.stop_btn = tk.Button(
-            sf, text="停止", font=("Microsoft YaHei", 12, "bold"),
+            sf, text="停止", font=self.FONT_BOLD_12,
             bg=DANGER, fg="white", activebackground="#C0392B",
             relief=tk.FLAT, padx=14, pady=4, cursor="hand2",
             state=tk.DISABLED, command=self._stop_crawl,
@@ -180,7 +210,7 @@ class CrawlerApp:
         self.stop_btn.pack(side=tk.LEFT, padx=(0, 8))
 
         self.export_btn = tk.Button(
-            sf, text="导出结果", font=("Microsoft YaHei", 12),
+            sf, text="导出结果", font=self.FONT_12,
             bg=ACCENT, fg="white", activebackground="#219A52",
             relief=tk.FLAT, padx=14, pady=4, cursor="hand2",
             command=self._export,
@@ -191,9 +221,9 @@ class CrawlerApp:
         container = tk.Frame(self.root, bg=BG)
         container.pack(fill=tk.BOTH, expand=True, padx=16, pady=(4, 4))
 
-        self.info_label = tk.Label(
+        self.info_label = self._make_label(
             container, text="尚未爬取，请选择平台并点击开始爬取",
-            font=("Microsoft YaHei", 11), bg=BG, fg=TEXT_LIGHT,
+            font=self.FONT_11, bg=BG, fg=TEXT_LIGHT,
         )
         self.info_label.pack(anchor=tk.W, pady=(4, 2))
 
@@ -226,26 +256,14 @@ class CrawlerApp:
         tree_frame.grid_columnconfigure(0, weight=1)
         self.tree.bind("<Double-1>", self._show_detail)
 
-        style = ttk.Style()
-        style.theme_use("clam")
-        style.configure("Treeview",
-                        background=CARD_BG, fieldbackground=CARD_BG,
-                        font=("Microsoft YaHei", 11), rowheight=30)
-        style.configure("Treeview.Heading",
-                        font=("Microsoft YaHei", 11, "bold"),
-                        background="#E8EEF4", foreground=TEXT_DARK)
-        style.map("Treeview",
-                  background=[("selected", "#D5E8FF")],
-                  foreground=[("selected", PRIMARY)])
-
     def _build_footer(self):
         footer = tk.Frame(self.root, bg="#E8EEF4", height=28)
         footer.pack(fill=tk.X, side=tk.BOTTOM)
         footer.pack_propagate(False)
         self.progress = ttk.Progressbar(footer, mode="determinate", length=200)
         self.progress.pack(side=tk.LEFT, padx=12, pady=4)
-        self.progress_label = tk.Label(
-            footer, text="", font=("Microsoft YaHei", 10),
+        self.progress_label = self._make_label(
+            footer, text="", font=self.FONT_10,
             bg="#E8EEF4", fg=TEXT_LIGHT,
         )
         self.progress_label.pack(side=tk.LEFT, padx=4)
@@ -262,14 +280,12 @@ class CrawlerApp:
 
     def _set_boss_logged_in(self):
         self._boss_logged_in = True
-        if hasattr(self, '_boss_login_label') and self._boss_login_label.winfo_exists():
-            self._boss_login_label.config(text="已登录", fg="#27AE60")
+        self._boss_login_label.config(text="已登录", fg="#27AE60")
 
     def _reset_boss_login_status(self):
         self._boss_logged_in = False
         self._boss_credentials = None
-        if hasattr(self, '_boss_login_label') and self._boss_login_label.winfo_exists():
-            self._boss_login_label.config(text="需登录", fg="#E67E22")
+        self._boss_login_label.config(text="需登录", fg="#E67E22")
 
     # ──────────── 浏览器登录 ────────────
 
@@ -283,27 +299,27 @@ class CrawlerApp:
         dlg.transient(self.root)
         dlg.grab_set()
 
-        tk.Label(
+        self._make_label(
             dlg, text="Boss直聘临时登录信息",
-            font=("Microsoft YaHei", 14, "bold"), bg=CARD_BG, fg=TEXT_DARK,
+            font=self.FONT_BOLD_14, bg=CARD_BG, fg=TEXT_DARK,
         ).pack(pady=(20, 8))
-        tk.Label(
+        self._make_label(
             dlg,
             text="账号和密码仅保存在内存中，可全部留空并在打开的浏览器中自行登录。\n"
                  "短信、滑块或验证码必须由你手动完成。",
-            font=("Microsoft YaHei", 10), bg=CARD_BG, fg=TEXT_LIGHT,
+            font=self.FONT_10, bg=CARD_BG, fg=TEXT_LIGHT,
             justify=tk.LEFT,
         ).pack(padx=28, anchor=tk.W)
 
         form = tk.Frame(dlg, bg=CARD_BG)
         form.pack(fill=tk.X, padx=28, pady=14)
-        tk.Label(form, text="账号：", font=("Microsoft YaHei", 11),
+        self._make_label(form, text="账号：", font=self.FONT_11,
                  bg=CARD_BG, fg=TEXT_DARK).grid(row=0, column=0, pady=6, sticky=tk.E)
-        username = tk.Entry(form, font=("Microsoft YaHei", 11), width=32)
+        username = tk.Entry(form, font=self.FONT_11, width=32)
         username.grid(row=0, column=1, pady=6)
-        tk.Label(form, text="密码：", font=("Microsoft YaHei", 11),
+        self._make_label(form, text="密码：", font=self.FONT_11,
                  bg=CARD_BG, fg=TEXT_DARK).grid(row=1, column=0, pady=6, sticky=tk.E)
-        password = tk.Entry(form, font=("Microsoft YaHei", 11), width=32, show="*")
+        password = tk.Entry(form, font=self.FONT_11, width=32, show="*")
         password.grid(row=1, column=1, pady=6)
 
         if self._boss_credentials:
@@ -321,7 +337,7 @@ class CrawlerApp:
             threading.Thread(target=self._do_boss_login_background, daemon=True).start()
 
         tk.Button(
-            dlg, text="确定并登录", command=save, font=("Microsoft YaHei", 11, "bold"),
+            dlg, text="确定并登录", command=save, font=self.FONT_BOLD_11,
             bg=PRIMARY, fg="white", relief=tk.FLAT, padx=24, pady=5,
         ).pack()
 
@@ -375,15 +391,15 @@ class CrawlerApp:
         dlg.transient(self.root)
         dlg.attributes("-topmost", True)
 
-        tk.Label(
+        self._make_label(
             dlg, text="请在已打开的 Chrome 浏览器中完成登录",
-            font=("Microsoft YaHei", 13, "bold"), bg=CARD_BG, fg=TEXT_DARK,
+            font=self.FONT_BOLD_13, bg=CARD_BG, fg=TEXT_DARK,
         ).pack(pady=(22, 10))
-        tk.Label(
+        self._make_label(
             dlg,
             text="程序已尝试预填账号字段。请自行选择登录方式并完成短信、滑块或验证码；\n"
                  "确认网页已登录后，再点击“已完成登录”。",
-            font=("Microsoft YaHei", 10), bg=CARD_BG, fg=TEXT_LIGHT,
+            font=self.FONT_10, bg=CARD_BG, fg=TEXT_LIGHT,
             justify=tk.LEFT,
         ).pack(padx=24)
 
@@ -400,12 +416,12 @@ class CrawlerApp:
 
         tk.Button(
             buttons, text="已完成登录", command=done,
-            font=("Microsoft YaHei", 11, "bold"), bg=ACCENT, fg="white",
+            font=self.FONT_BOLD_11, bg=ACCENT, fg="white",
             relief=tk.FLAT, padx=20, pady=5,
         ).pack(side=tk.LEFT, padx=8)
         tk.Button(
             buttons, text="取消", command=cancel,
-            font=("Microsoft YaHei", 11), bg="#E8EEF4", fg=TEXT_DARK,
+            font=self.FONT_11, bg="#E8EEF4", fg=TEXT_DARK,
             relief=tk.FLAT, padx=20, pady=5,
         ).pack(side=tk.LEFT, padx=8)
         dlg.protocol("WM_DELETE_WINDOW", cancel)
@@ -494,7 +510,6 @@ class CrawlerApp:
             except Exception as e:
                 statuses.append(("error", f"{pname}: {e}"))
             self.root.after(0, lambda c=i+1, t=len(platforms): self._update_progress(c, t))
-            time.sleep(random.uniform(0.5, 1.5))
 
         self.root.after(0, lambda: self._crawl_done(False, statuses))
 
@@ -520,8 +535,9 @@ class CrawlerApp:
         self.progress_label.config(text=f"{platform_name} · 第 {page} 页 · 累计 {total} 条")
 
     def _append_rows(self, data: List[CompanyInfo]):
+        tree = self.tree
         for c in data:
-            self.tree.insert("", tk.END, values=(
+            tree.insert("", tk.END, values=(
                 c.platform, c.name, c.industry, c.scale, c.stage,
                 c.hot_jobs, c.salary, c.location,
             ))
@@ -572,16 +588,14 @@ class CrawlerApp:
         if not sel:
             return
         item_id = sel[0]
-        # 查找 item_id 在 tree 中的索引
         all_ids = self.tree.get_children()
         try:
             idx = all_ids.index(item_id)
         except ValueError:
             return
-        if idx < len(self.results):
-            c = self.results[idx]
-        else:
+        if idx >= len(self.results):
             return
+        c = self.results[idx]
 
         detail_win = tk.Toplevel(self.root)
         detail_win.title(f"公司详情  {c.name}")
@@ -603,21 +617,21 @@ class CrawlerApp:
 
         y = 16
         for label, value in fields:
-            tk.Label(
+            self._make_label(
                 detail_win, text=f"{label}：",
-                font=("Microsoft YaHei", 12, "bold"),
+                font=self.FONT_BOLD_12,
                 bg=CARD_BG, fg=TEXT_DARK, anchor=tk.NW,
             ).place(x=20, y=y)
-            tk.Label(
+            self._make_label(
                 detail_win, text=value or "暂无",
-                font=("Microsoft YaHei", 12),
+                font=self.FONT_12,
                 bg=CARD_BG, fg=TEXT_LIGHT,
                 anchor=tk.NW, wraplength=320, justify=tk.LEFT,
             ).place(x=120, y=y)
             y += 42
 
         tk.Button(
-            detail_win, text="关闭", font=("Microsoft YaHei", 12),
+            detail_win, text="关闭", font=self.FONT_12,
             bg=PRIMARY, fg="white", relief=tk.FLAT,
             padx=24, pady=4, command=detail_win.destroy, cursor="hand2",
         ).place(x=210, y=y + 10)
