@@ -1,0 +1,4 @@
+.browser_profile/
+.cookies.json
+__pycache__/
+*.py[cod]
