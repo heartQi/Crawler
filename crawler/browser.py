@@ -4,11 +4,14 @@
 
 from __future__ import annotations
 
+import json
 import os
 import socket
 import subprocess
 import time
-from typing import Optional
+import urllib.error
+import urllib.request
+from typing import List, Optional
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -73,6 +76,59 @@ def launch_manual_chrome(
         f"Chrome 调试端口 {port} 未就绪。\n"
         "请关闭占用该端口的 Chrome 后重试，或重启电脑后再运行。"
     )
+
+
+def get_debugger_tabs(port: int = REMOTE_DEBUG_PORT) -> List[dict]:
+    try:
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/json/list", timeout=2,
+        ) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError, json.JSONDecodeError):
+        return []
+
+
+def manual_browser_ready(
+    platform_key: str,
+    port: int = REMOTE_DEBUG_PORT,
+    captcha_title_keywords: Optional[List[str]] = None,
+) -> bool:
+    """通过调试端口判断页面是否已离开验证页（无需 Selenium 附着）。"""
+    captcha_title_keywords = captcha_title_keywords or []
+    domain_map = {
+        "lagou": "lagou.com",
+        "liepin": "liepin.com",
+    }
+    domain = domain_map.get(platform_key, "")
+    if not domain:
+        return False
+
+    for tab in get_debugger_tabs(port):
+        url = tab.get("url", "")
+        title = tab.get("title", "")
+        if domain not in url:
+            continue
+        if any(kw in title for kw in captcha_title_keywords):
+            return False
+        if title and title not in ("", "about:blank"):
+            if "访问验证" in title or "安全中心" in title:
+                return False
+            return True
+    return False
+
+
+def wait_manual_browser_ready(
+    platform_key: str,
+    captcha_title_keywords: Optional[List[str]] = None,
+    timeout: float = 20.0,
+    port: int = REMOTE_DEBUG_PORT,
+) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if manual_browser_ready(platform_key, port, captcha_title_keywords):
+            return True
+        time.sleep(0.5)
+    return manual_browser_ready(platform_key, port, captcha_title_keywords)
 
 
 def attach_to_chrome(port: int = REMOTE_DEBUG_PORT) -> webdriver.Chrome:

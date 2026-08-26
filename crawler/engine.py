@@ -19,7 +19,12 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
 from .auth import Credentials, LoginCoordinator
-from .browser import attach_to_chrome, is_debug_port_open, launch_manual_chrome
+from .browser import (
+    attach_to_chrome,
+    is_debug_port_open,
+    launch_manual_chrome,
+    wait_manual_browser_ready,
+)
 from .config import (
     BROWSER_HEADLESS,
     BROWSER_PROFILE_DIR,
@@ -196,10 +201,21 @@ class CrawlerEngine:
                 else:
                     log_callback(f"[{pname}] 检测到已有调试 Chrome，直接连接...")
 
-                if not login_confirmation:
-                    raise RuntimeError(f"{pname} 需要手动验证，但程序未提供确认回调")
-                if not login_confirmation(pname, 300):
-                    raise RuntimeError(f"{pname} 未完成手动验证")
+                cfg = PLATFORM_CONFIG.get(platform_key, {})
+                captcha_titles = cfg.get("captcha_title_keywords", [])
+                log_callback(f"[{pname}] 等待页面加载...")
+                if wait_manual_browser_ready(
+                    platform_key, captcha_titles, timeout=18.0,
+                ):
+                    log_callback(f"[{pname}] 页面已就绪，自动继续查询...")
+                else:
+                    log_callback(
+                        f"[{pname}] 需要手动确认：请在主程序弹窗点击「已完成」继续"
+                    )
+                    if not login_confirmation:
+                        raise RuntimeError(f"{pname} 需要手动验证，但程序未提供确认回调")
+                    if not login_confirmation(pname, 300):
+                        raise RuntimeError(f"{pname} 未完成手动验证")
 
                 self._driver = attach_to_chrome()
                 self._driver_mode = "attach"

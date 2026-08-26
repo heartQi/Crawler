@@ -129,7 +129,7 @@ class CrawlerApp:
         pf.pack(fill=tk.X, padx=12, pady=(10, 4))
 
         for key, info in PLATFORMS.items():
-            var = tk.BooleanVar(value=True)
+            var = tk.BooleanVar(value=False)
             self.platform_vars[key] = var
             cb = tk.Checkbutton(
                 pf, text=info["name"], variable=var,
@@ -391,7 +391,12 @@ class CrawlerApp:
         dlg.geometry("520x260")
         dlg.configure(bg=CARD_BG)
         dlg.transient(self.root)
+        dlg.grab_set()
         dlg.attributes("-topmost", True)
+        dlg.lift()
+        dlg.focus_force()
+        self.root.lift()
+        self.status_label.config(text=f"等待 {platform_name} 验证确认...")
 
         self._make_label(
             dlg, text="请在已打开的 Chrome 窗口中完成验证",
@@ -411,10 +416,12 @@ class CrawlerApp:
 
         def done():
             self._login_done_event.set()
+            self.status_label.config(text="验证已确认，查询中...")
             dlg.destroy()
 
         def cancel():
             self._login_cancel_event.set()
+            self.status_label.config(text="就绪")
             dlg.destroy()
 
         tk.Button(
@@ -472,6 +479,8 @@ class CrawlerApp:
         self.crawl_btn.config(state=tk.DISABLED, text="查询中...")
         self.stop_btn.config(state=tk.NORMAL)
         self.status_label.config(text=f"查询中  {city_name}...")
+        self.info_label.config(text=f"正在准备查询  |  关键词：{keyword}  |  地区：{city_name}")
+        self.progress_label.config(text="")
         self.results.clear()
         for item in self.tree.get_children():
             self.tree.delete(item)
@@ -495,7 +504,10 @@ class CrawlerApp:
                 return
             pname = PLATFORMS[pk]["name"]
             city_code = city_codes.get(pk, "")
-            self.root.after(0, lambda n=pname: self.progress_label.config(text=f"正在查询 {n}（全量）..."))
+            def _set_platform_status(n=pname, idx=i + 1, total=len(platforms)):
+                self.info_label.config(text=f"正在查询 {n}...")
+                self.progress_label.config(text=f"{idx}/{total} 平台")
+            self.root.after(0, _set_platform_status)
             try:
                 result = self.engine.crawl(
                     pk, keyword, city_code=city_code,
