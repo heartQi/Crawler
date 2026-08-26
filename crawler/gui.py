@@ -43,6 +43,7 @@ class CrawlerApp:
         self._login_done_event = Event()
         self._login_cancel_event = Event()
         self._boss_credentials = None
+        self._boss_logged_in = False
         self._login_dialog = None
 
         self.root = tk.Tk()
@@ -102,14 +103,22 @@ class CrawlerApp:
         for key, info in PLATFORMS.items():
             var = tk.BooleanVar(value=True)
             self.platform_vars[key] = var
-            label = info["name"] + (" [需登录]" if info.get("requires_login") else "")
             cb = tk.Checkbutton(
-                pf, text=label, variable=var,
+                pf, text=info["name"], variable=var,
                 font=("Microsoft YaHei", 12), bg=CARD_BG,
                 activebackground=CARD_BG, selectcolor=CARD_BG,
                 fg=info["color"],
             )
             cb.pack(side=tk.LEFT, padx=(0, 18))
+            if key == "boss" and info.get("requires_login"):
+                self._boss_login_label = tk.Label(
+                    pf, text="需登录", font=("Microsoft YaHei", 10, "bold"),
+                    fg="#E67E22", bg=CARD_BG, cursor="hand2",
+                )
+                self._boss_login_label.pack(side=tk.LEFT, padx=(0, 18))
+                self._boss_login_label.bind(
+                    "<Button-1>", lambda e: self._open_login_settings()
+                )
 
         tk.Button(
             pf, text="全选", font=("Microsoft YaHei", 10),
@@ -121,11 +130,6 @@ class CrawlerApp:
             command=self._deselect_all, bg="#EBF5FB", relief=tk.FLAT,
             cursor="hand2",
         ).pack(side=tk.LEFT, padx=2)
-        tk.Button(
-            pf, text="登录设置", font=("Microsoft YaHei", 10, "bold"),
-            command=self._open_login_settings, bg="#FFF3CD", relief=tk.FLAT,
-            cursor="hand2",
-        ).pack(side=tk.LEFT, padx=(12, 2))
 
         # ── 搜索栏 ──
         sf = tk.Frame(panel, bg=CARD_BG)
@@ -256,10 +260,21 @@ class CrawlerApp:
         for var in self.platform_vars.values():
             var.set(False)
 
+    def _set_boss_logged_in(self):
+        self._boss_logged_in = True
+        if hasattr(self, '_boss_login_label') and self._boss_login_label.winfo_exists():
+            self._boss_login_label.config(text="已登录", fg="#27AE60")
+
+    def _reset_boss_login_status(self):
+        self._boss_logged_in = False
+        self._boss_credentials = None
+        if hasattr(self, '_boss_login_label') and self._boss_login_label.winfo_exists():
+            self._boss_login_label.config(text="需登录", fg="#E67E22")
+
     # ──────────── 浏览器登录 ────────────
 
     def _open_login_settings(self):
-        """收集 Boss 临时凭据；允许留空后在浏览器中自行选择登录方式。"""
+        """收集 Boss 临时凭据并立即启动浏览器登录流程。"""
         dlg = tk.Toplevel(self.root)
         dlg.title("Boss直聘登录设置")
         dlg.geometry("480x300")
@@ -302,12 +317,39 @@ class CrawlerApp:
                 password=password.get(),
             )
             dlg.destroy()
-            self.status_label.config(text="Boss 登录信息已准备")
+            self.status_label.config(text="Boss 登录信息已准备，正在打开浏览器...")
+            threading.Thread(target=self._do_boss_login_background, daemon=True).start()
 
         tk.Button(
-            dlg, text="确定", command=save, font=("Microsoft YaHei", 11, "bold"),
+            dlg, text="确定并登录", command=save, font=("Microsoft YaHei", 11, "bold"),
             bg=PRIMARY, fg="white", relief=tk.FLAT, padx=24, pady=5,
         ).pack()
+
+    def _do_boss_login_background(self):
+        """在后台线程中执行 Boss 登录流程。"""
+        try:
+            from .auth import LoginCoordinator
+            driver = self.engine._get_driver()
+            auth = LoginCoordinator(
+                driver, self._stop_event,
+                log=lambda msg: print(msg),
+            )
+            success = auth.ensure_boss_login(
+                self._boss_credentials,
+                self._wait_for_login_confirmation,
+            )
+            if success:
+                if self._boss_credentials:
+                    self._boss_credentials.clear()
+                self.root.after(0, self._set_boss_logged_in)
+            else:
+                self.root.after(0, self._reset_boss_login_status)
+                self.root.after(0, lambda: messagebox.showwarning(
+                    "登录失败", "Boss直聘登录未完成，状态恢复为需登录。"))
+        except Exception as e:
+            self.root.after(0, self._reset_boss_login_status)
+            self.root.after(0, lambda: messagebox.showerror(
+                "登录出错", f"Boss直聘登录过程出错：{e}"))
 
     def _wait_for_login_confirmation(self, platform_name: str, timeout: int) -> bool:
         """工作线程等待主线程中的人工登录确认。"""
@@ -406,7 +448,7 @@ class CrawlerApp:
         city_codes = CITIES.get(city_name, {})
         self._crawl_stop = False
         self._stop_event.clear()
-        if "boss" in selected and self._boss_credentials is None:
+        if "boss" in selected and self._boss_credentials is None and not self._boss_logged_in:
             self._boss_credentials = Credentials()
         self.crawl_btn.config(state=tk.DISABLED, text="爬取中...")
         self.stop_btn.config(state=tk.NORMAL)
@@ -493,7 +535,7 @@ class CrawlerApp:
         self.stop_btn.config(state=tk.DISABLED)
         n = len(self.results)
         statuses = statuses or []
-        if self._boss_credentials:
+        if self._boss_credentials and not self._boss_logged_in:
             self._boss_credentials.clear()
             self._boss_credentials = None
 
