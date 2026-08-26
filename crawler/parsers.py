@@ -5,10 +5,40 @@
 """
 
 import json
+import re
 
 from selenium.webdriver.common.by import By
 
 from .models import CompanyInfo
+
+CONTACT_PHONE_RE = re.compile(
+    r"1[3-9]\d{9}|0\d{2,3}[-\s]?\d{7,8}",
+)
+CONTACT_EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
+
+
+def _extract_contact_from_item(item) -> tuple[str, str]:
+    """从卡片 DOM 尝试提取联系人、电话/邮箱（仅用精确选择器，避免卡顿）。"""
+    person = _first_text(
+        item,
+        ".publisher_name a",
+        ".publisher_name",
+        ".hr_name",
+        ".recruiter-name",
+        ".boss-name",
+        ".companyinfo__staff",
+    )
+    info = _first_text(item, ".mobile", ".tel", ".phone")
+    if not info:
+        text = item.text or ""
+        phone = CONTACT_PHONE_RE.search(text)
+        if phone:
+            info = phone.group(0)
+        else:
+            email = CONTACT_EMAIL_RE.search(text)
+            if email:
+                info = email.group(0)
+    return person or "—", info or "—"
 
 
 def parse_zhilian_item(item) -> CompanyInfo | None:
@@ -39,11 +69,15 @@ def parse_zhilian_item(item) -> CompanyInfo | None:
         else:
             stage = t
 
+    contact_person, contact_info = _extract_contact_from_item(item)
+
     return CompanyInfo(
         platform="智联招聘", name=comp_name,
         industry=industry or "—", scale=scale or "—",
         stage=stage or "—", description="",
         location=location, hot_jobs=job_name, salary=salary,
+        contact_person=contact_person,
+        contact_info=contact_info,
     )
 
 
@@ -94,11 +128,15 @@ def parse_51job_item(item) -> CompanyInfo | None:
     if not comp_name and not job_name:
         return None
 
+    contact_person, contact_info = _extract_contact_from_item(item)
+
     return CompanyInfo(
         platform="前程无忧", name=comp_name or "—",
         industry=industry or "—", scale=scale or "—",
         stage=stage or "—", description="",
         location=location, hot_jobs=job_name, salary=salary,
+        contact_person=contact_person,
+        contact_info=contact_info,
     )
 
 
@@ -113,6 +151,8 @@ def parse_boss_item(item) -> CompanyInfo | None:
     if not comp:
         return None
 
+    contact_person, contact_info = _extract_contact_from_item(item)
+
     return CompanyInfo(
         platform="Boss直聘", name=comp,
         industry="—", scale="—", stage="—",
@@ -120,38 +160,159 @@ def parse_boss_item(item) -> CompanyInfo | None:
         location=area_els[0].text.strip() if area_els else "—",
         hot_jobs=job_els[0].text.strip() if job_els else "—",
         salary=sal_els[0].text.strip() if sal_els else "—",
+        contact_person=contact_person,
+        contact_info=contact_info,
     )
+
+
+def _first_text(item, *selectors: str) -> str:
+    for sel in selectors:
+        for el in item.find_elements(By.CSS_SELECTOR, sel):
+            text = el.text.strip()
+            if text:
+                return text
+    return ""
+
+
+LAGOU_SCALE_RE = re.compile(
+    r"(?:少于\s*)?\d+\s*[-~～至]\s*\d+\s*人|\d+\s*人以上|10000\s*人以上|不公开",
+    re.I,
+)
+
+
+def _extract_scale(text: str) -> str:
+    if not text:
+        return "—"
+    match = LAGOU_SCALE_RE.search(text.replace(" ", ""))
+    if match:
+        return match.group(0)
+    match = LAGOU_SCALE_RE.search(text)
+    return match.group(0) if match else "—"
+
+
+def _split_lagou_meta(text: str) -> tuple[str, str]:
+    """解析「行业 / 融资阶段 / 规模」→ 只取行业和规模。"""
+    if not text:
+        return "—", "—"
+    parts = [p.strip() for p in re.split(r"\s*[·/|]\s*", text) if p.strip()]
+    if not parts:
+        return "—", "—"
+    industry = parts[0]
+    scale = "—"
+    for part in reversed(parts):
+        found = _extract_scale(part)
+        if found != "—":
+            scale = found
+            break
+    if scale == "—" and len(parts) >= 2:
+        scale = _extract_scale(text)
+    return industry, scale
+
+
+def _looks_like_company_name(text: str, company_name: str) -> bool:
+    if not text or not company_name:
+        return False
+    a = re.sub(r"\s+", "", text)
+    b = re.sub(r"\s+", "", company_name)
+    return a == b or a in b or b in a
+
+
+def _parse_lagou_meta(item, company_name: str = "") -> tuple[str, str]:
+    """
+    解析行业、规模。
+    行业在 .industry_field；勿从 .company / .company_name 取文本。
+    """
+    industry = _first_text(
+        item,
+        ".company_others .industry_field",
+        ".industry_field",
+        ".list_item_bot .li_b_l .industry",
+    )
+    if _looks_like_company_name(industry, company_name):
+        industry = ""
+
+    scale = _first_text(
+        item,
+        ".company_others .scale",
+        ".list_item_bot .li_b_l .scale",
+    )
+    if scale == "—" or not scale:
+        scale = ""
+
+    for el in item.find_elements(By.CSS_SELECTOR, ".company_others"):
+        raw = el.text.strip()
+        if company_name and raw.startswith(company_name):
+            raw = raw[len(company_name):].strip()
+        if raw:
+            ind, sc = _split_lagou_meta(raw)
+            if not industry and not _looks_like_company_name(ind, company_name):
+                industry = ind
+            if not scale and sc != "—":
+                scale = sc
+        for span in el.find_elements(By.CSS_SELECTOR, "span.industry_field, span.industry"):
+            text = span.text.strip()
+            if text and not _looks_like_company_name(text, company_name):
+                industry = text
+                break
+        if not scale:
+            for span in el.find_elements(By.CSS_SELECTOR, "span"):
+                text = span.text.strip()
+                found = _extract_scale(text)
+                if found != "—":
+                    scale = found
+                    break
+
+    for el in item.find_elements(By.CSS_SELECTOR, ".list_item_bot .li_b_l"):
+        raw = el.text.strip()
+        if raw and ("/" in raw or "·" in raw or "|" in raw):
+            ind, sc = _split_lagou_meta(raw)
+            if not industry and not _looks_like_company_name(ind, company_name):
+                industry = ind
+            if not scale and sc != "—":
+                scale = sc
+
+    if industry and re.search(r"[/|·]", industry):
+        ind, sc = _split_lagou_meta(industry)
+        industry = ind if not _looks_like_company_name(ind, company_name) else ""
+        if not scale and sc != "—":
+            scale = sc
+
+    if _looks_like_company_name(industry, company_name):
+        industry = ""
+
+    scale = scale or _extract_scale(item.text or "")
+    return industry or "—", scale if scale != "—" else "—"
 
 
 def parse_lagou_item(item) -> CompanyInfo | None:
-    """解析拉勾网单条职位卡片"""
-    name_els = item.find_elements(
-        By.CSS_SELECTOR,
-        ".company-name__2-SjF, .company-name, [class*=companyName], [class*=company-name], .con_list_item .company_name",
+    """解析拉勾网单条职位卡片（公司维度：名称、行业、规模、地点）。"""
+    comp = _first_text(
+        item,
+        ".company_name a",
+        ".company_name",
+        ".company-name a",
+        ".company-name",
+        ".company-name__2-SjF",
     )
-    job_els = item.find_elements(
-        By.CSS_SELECTOR,
-        ".position-name__2Kw3s, .position-name, [class*=positionName], .con_list_item .job-name",
-    )
-    sal_els = item.find_elements(
-        By.CSS_SELECTOR,
-        ".salary__13530, .money, [class*=salary], .con_list_item .salary",
-    )
-    info_els = item.find_elements(
-        By.CSS_SELECTOR,
-        ".industry, [class*=industry], .con_list_item .industry",
-    )
+    location = _first_text(item, ".add", ".position-area")
+    industry, scale = _parse_lagou_meta(item, company_name=comp)
+    contact_person, contact_info = _extract_contact_from_item(item)
 
-    comp = name_els[0].text.strip() if name_els else ""
     if not comp:
         return None
 
     return CompanyInfo(
-        platform="拉勾网", name=comp,
-        industry=info_els[0].text.strip() if info_els else "—",
-        scale="—", stage="—", description="", location="—",
-        hot_jobs=job_els[0].text.strip() if job_els else "—",
-        salary=sal_els[0].text.strip() if sal_els else "—",
+        platform="拉勾网",
+        name=comp,
+        industry=industry,
+        scale=scale,
+        stage="",
+        description="",
+        location=location or "—",
+        hot_jobs="",
+        salary="",
+        contact_person=contact_person,
+        contact_info=contact_info,
     )
 
 
@@ -177,12 +338,16 @@ def parse_liepin_item(item) -> CompanyInfo | None:
         elif not scale:
             scale = t
 
+    contact_person, contact_info = _extract_contact_from_item(item)
+
     return CompanyInfo(
         platform="猎聘", name=comp,
         industry=industry or "—", scale=scale or "—",
         stage="—", description="", location="—",
         hot_jobs=job_els[0].text.strip() if job_els else "—",
         salary=sal_els[0].text.strip() if sal_els else "—",
+        contact_person=contact_person,
+        contact_info=contact_info,
     )
 
 
@@ -228,17 +393,16 @@ PLATFORM_CONFIG = {
     },
     "lagou": {
         "url_tpl": "https://www.lagou.com/wn/search/?kd={kw}&pn={page}",
-        "item_css": ".item__10RTO, [class*=ItemList] > div, "
-                    "[class*=job-list] li, .position-list .item, "
-                    ".position-item, [class*=position-item], [class*=job-item], "
-                    ".con_list_item, .default-list>.item",
-        "next_css": ".lg-pagination-next:not(.lg-pagination-disabled), "
-                    ".pager_next:not(.pager_next_disabled), "
-                    ".pager_next, button[aria-label*='下一页']:not([disabled])",
+        "item_css": ".con_list_item",
+        "next_css": ".pager_next, span[action='next'], "
+                    ".pager_container span:last-child, "
+                    ".lg-page-item.next:not(.disabled), "
+                    "li.next:not(.disabled)",
         "empty_css": ".search-no-result, .empty-position",
         "parse_fn": parse_lagou_item,
+        "dedupe_by": "name",
         "captcha_title_keywords": ["访问验证"],
-        "captcha_body_keywords": ["验证失败", "请进行验证", "请刷新"],
+        "captcha_body_keywords": ["验证失败", "请进行验证"],
         "captcha_css": "iframe[src*='verify'], iframe[src*='captcha'], "
                        ".geetest_panel, #tcaptcha, [class*='verify-wrap'], [class*='access-verify']",
         "method": "browser",

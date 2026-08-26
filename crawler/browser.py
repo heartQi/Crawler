@@ -6,17 +6,24 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import socket
 import subprocess
 import time
 import urllib.error
 import urllib.request
-from typing import List, Optional
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from typing import Callable, List, Optional
 
 from selenium import webdriver
+from selenium.common.exceptions import TimeoutException, WebDriverException
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
 
-from .config import MANUAL_BROWSER_PROFILE_DIR, PAGE_LOAD_TIMEOUT, REMOTE_DEBUG_PORT
+from .config import MANUAL_BROWSER_PROFILE_DIR, REMOTE_DEBUG_PORT
+
+ATTACHED_PAGE_LOAD_TIMEOUT = 30
+ATTACH_TIMEOUT = 25
 
 CHROME_CANDIDATES = [
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
@@ -131,7 +138,39 @@ def wait_manual_browser_ready(
     return manual_browser_ready(platform_key, port, captcha_title_keywords)
 
 
-def attach_to_chrome(port: int = REMOTE_DEBUG_PORT) -> webdriver.Chrome:
+def _create_attached_driver(port: int) -> webdriver.Chrome:
+    opts = Options()
+    opts.page_load_strategy = "eager"
+    opts.add_experimental_option("debuggerAddress", f"127.0.0.1:{port}")
+
+    try:
+        from webdriver_manager.chrome import ChromeDriverManager
+        service = Service(ChromeDriverManager().install())
+        return webdriver.Chrome(service=service, options=opts)
+    except Exception:
+        return webdriver.Chrome(options=opts)
+
+
+def focus_platform_tab(driver, domain: str) -> bool:
+    """切换到目标平台标签页。"""
+    try:
+        for handle in driver.window_handles:
+            driver.switch_to.window(handle)
+            try:
+                if domain in (driver.current_url or ""):
+                    return True
+            except WebDriverException:
+                continue
+    except WebDriverException:
+        pass
+    return False
+
+
+def attach_to_chrome(
+    port: int = REMOTE_DEBUG_PORT,
+    platform_domain: str = "",
+    log: Optional[Callable[[str], None]] = None,
+) -> webdriver.Chrome:
     """附着到已打开的 Chrome，不再由 WebDriver 启动浏览器。"""
     if not is_debug_port_open(port):
         raise RuntimeError(
@@ -139,8 +178,43 @@ def attach_to_chrome(port: int = REMOTE_DEBUG_PORT) -> webdriver.Chrome:
             "请先在弹出的浏览器窗口中完成验证。"
         )
 
-    opts = Options()
-    opts.add_experimental_option("debuggerAddress", f"127.0.0.1:{port}")
-    driver = webdriver.Chrome(options=opts)
-    driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT)
+    if log:
+        log("正在连接 Chrome 调试端口（首次可能需十几秒）...")
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(_create_attached_driver, port)
+        try:
+            driver = future.result(timeout=ATTACH_TIMEOUT)
+        except FuturesTimeoutError as exc:
+            raise RuntimeError(
+                f"连接 Chrome 超时（{ATTACH_TIMEOUT} 秒）。\n"
+                "请关闭所有 Chrome 窗口后重试，或删除项目下的 .manual_browser 文件夹。"
+            ) from exc
+
+    driver.set_page_load_timeout(ATTACHED_PAGE_LOAD_TIMEOUT)
+    driver.set_script_timeout(15)
+
+    if platform_domain:
+        if focus_platform_tab(driver, platform_domain):
+            if log:
+                log(f"已切换到 {platform_domain} 标签页")
+        elif log:
+            log(f"未找到 {platform_domain} 标签，使用当前标签页")
+
+    if log:
+        log("Chrome 连接成功")
     return driver
+
+
+def safe_get(driver, url: str, log=None) -> None:
+    """导航到 URL；超时则停止加载并继续（避免 SPA 永远等 complete）。"""
+    try:
+        driver.get(url)
+    except TimeoutException:
+        if log:
+            log("页面加载超时，继续处理已加载内容…")
+        try:
+            driver.execute_script("window.stop();")
+        except WebDriverException:
+            pass
+    time.sleep(random.uniform(1.5, 2.5))

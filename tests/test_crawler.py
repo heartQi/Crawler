@@ -69,6 +69,7 @@ class CrawlerUnitTests(unittest.TestCase):
                 platform="测试", name=item.text, industry="", scale="",
                 stage="", description="", location="北京",
                 hot_jobs="Python", salary="",
+                contact_person="", contact_info="",
             )
 
         cfg = {"parse_fn": parser}

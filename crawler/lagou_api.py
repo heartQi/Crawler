@@ -5,21 +5,69 @@
 from __future__ import annotations
 
 import random
+import re
 import time
 import urllib.parse
 from typing import Callable, List, Optional
 
+from .browser import safe_get
 from .models import CompanyInfo
+
+PHONE_RE = re.compile(
+    r"1[3-9]\d{9}|0\d{2,3}[-\s]?\d{7,8}|(?:\d{3,4}[-\s]){1,2}\d{3,8}",
+)
+EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
+
+
+def extract_lagou_contact(position: dict) -> tuple[str, str]:
+    """从拉勾职位 JSON 提取联系人、联系方式。"""
+    person = ""
+    info = ""
+
+    for key in ("publisherName", "hrName", "contactName", "recruiterName"):
+        val = position.get(key)
+        if val:
+            person = str(val).strip()
+            break
+
+    hr = position.get("hrInfo") or position.get("hr")
+    if isinstance(hr, dict):
+        person = person or str(hr.get("name") or hr.get("publisherName") or "").strip()
+        for key in ("phone", "mobile", "tel", "contactPhone", "email"):
+            val = hr.get(key)
+            if val:
+                info = str(val).strip()
+                break
+
+    for key in ("phone", "mobile", "contactPhone", "hrPhone", "tel", "email"):
+        val = position.get(key)
+        if val:
+            info = str(val).strip()
+            break
+
+    if not info:
+        blob = " ".join(str(position.get(k, "")) for k in ("positionAdvantage", "companyLabelList"))
+        phone = PHONE_RE.search(blob)
+        if phone:
+            info = phone.group(0)
+        else:
+            email = EMAIL_RE.search(blob)
+            if email:
+                info = email.group(0)
+
+    return person or "—", info or "—"
 
 LIST_URL = "https://www.lagou.com/jobs/list_{kw}"
 AJAX_URL = "https://www.lagou.com/jobs/positionAjax.json?needAddtionalResult=false"
 
 
-def build_list_url(keyword: str, city: str = "") -> str:
+def build_list_url(keyword: str, city: str = "", page: int = 1) -> str:
     kw_seg = urllib.parse.quote(keyword)
     url = f"{LIST_URL.format(kw=kw_seg)}?fromSearch=true"
     if city and city != "全国":
         url += f"&city={urllib.parse.quote(city)}"
+    if page > 1:
+        url += f"&pn={page}"
     return url
 
 
@@ -107,7 +155,7 @@ def fetch_lagou_page_with_retry(
         wait = 10 + attempt * 8 + random.uniform(2, 5)
         log(f"[拉勾网] 第 {page} 页被限流，{wait:.0f} 秒后刷新并重试 ({attempt + 2}/{max_retries})...")
         time.sleep(wait)
-        driver.get(list_url)
+        safe_get(driver, list_url, log)
         time.sleep(random.uniform(2.5, 4.0))
     return last
 
@@ -123,15 +171,67 @@ def parse_lagou_positions(positions: list) -> List[CompanyInfo]:
         city_val = p.get("city") or ""
         district = p.get("district") or ""
         location = f"{city_val}{district}".strip() or "—"
+        contact_person, contact_info = extract_lagou_contact(p)
         results.append(CompanyInfo(
             platform="拉勾网",
             name=name,
             industry=p.get("industryField") or "—",
             scale=p.get("companySize") or "—",
-            stage=p.get("financeStage") or "—",
+            stage="",
             description="",
             location=location,
-            hot_jobs=p.get("positionName") or "—",
-            salary=p.get("salary") or "—",
+            hot_jobs="",
+            salary="",
+            contact_person=contact_person,
+            contact_info=contact_info,
         ))
     return results
+
+
+def build_lagou_company_lookup(positions: list) -> dict:
+    """按公司名建立 Ajax 字段索引，供 DOM 解析结果补全。"""
+    lookup: dict = {}
+    for p in positions:
+        if not isinstance(p, dict):
+            continue
+        contact_person, contact_info = extract_lagou_contact(p)
+        payload = {
+            "industry": (p.get("industryField") or "").strip(),
+            "scale": (p.get("companySize") or "").strip(),
+            "location": f"{p.get('city') or ''}{p.get('district') or ''}".strip(),
+            "contact_person": contact_person if contact_person != "—" else "",
+            "contact_info": contact_info if contact_info != "—" else "",
+        }
+        for key in (p.get("companyFullName"), p.get("companyShortName")):
+            if key:
+                lookup[str(key).strip()] = payload
+    return lookup
+
+
+def enrich_lagou_companies(
+    companies: List[CompanyInfo],
+    lookup: dict,
+) -> None:
+    """用 Ajax 数据补全 DOM 解析缺失的行业/规模。"""
+    if not companies or not lookup:
+        return
+    for company in companies:
+        info = lookup.get(company.name)
+        if not info:
+            for name, data in lookup.items():
+                if company.name in name or name in company.name:
+                    info = data
+                    break
+        if not info:
+            continue
+        if company.industry in ("—", "") or company.industry == company.name:
+            if info.get("industry") and info["industry"] != company.name:
+                company.industry = info["industry"]
+        if company.scale in ("—", ""):
+            company.scale = info.get("scale") or "—"
+        if company.location in ("—", "") and info.get("location"):
+            company.location = info["location"]
+        if company.contact_person in ("—", "") and info.get("contact_person"):
+            company.contact_person = info["contact_person"]
+        if company.contact_info in ("—", "") and info.get("contact_info"):
+            company.contact_info = info["contact_info"]

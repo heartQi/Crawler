@@ -4,7 +4,7 @@
 数据模型定义
 """
 
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, fields
 from typing import List
 
 
@@ -20,15 +20,20 @@ class CompanyInfo:
     location: str       # 地址
     hot_jobs: str       # 热招岗位
     salary: str         # 薪资范围
+    contact_person: str = ""   # 联系人
+    contact_info: str = ""     # 联系方式（电话/邮箱等）
 
     def to_list(self):
-        return [self.platform, self.name, self.industry, self.scale,
-                self.stage, self.description, self.location,
-                self.hot_jobs, self.salary]
+        return [
+            self.platform, self.name, self.industry, self.scale,
+            self.stage, self.description, self.location,
+            self.hot_jobs, self.salary, self.contact_person, self.contact_info,
+        ]
 
     @classmethod
     def from_json(cls, data: dict) -> "CompanyInfo":
-        return cls(**{k: data.get(k, "") for k in cls.__dataclass_fields__})
+        valid = {f.name for f in fields(cls)}
+        return cls(**{k: data.get(k, "") for k in valid})
 
 
 @dataclass

@@ -227,10 +227,9 @@ class CrawlerApp:
         )
         self.info_label.pack(anchor=tk.W, pady=(4, 2))
 
-        columns = ("platform", "name", "industry", "scale", "stage",
-                   "hot_jobs", "salary", "location")
-        col_names = ("平台", "公司名称", "行业", "规模", "融资阶段",
-                     "热招岗位", "薪资", "地点")
+        columns = ("platform", "name", "industry", "scale", "location",
+                   "contact_person", "contact_info")
+        col_names = ("平台", "公司名称", "行业", "规模", "地点", "联系人", "联系方式")
 
         tree_frame = tk.Frame(container, bg=CARD_BG)
         tree_frame.pack(fill=tk.BOTH, expand=True)
@@ -240,7 +239,7 @@ class CrawlerApp:
             selectmode="browse",
         )
 
-        widths = (80, 120, 100, 90, 80, 140, 100, 120)
+        widths = (70, 130, 100, 90, 90, 80, 110)
         for col, name, w in zip(columns, col_names, widths):
             self.tree.heading(col, text=name, anchor=tk.W)
             self.tree.column(col, width=w, minwidth=60, anchor=tk.W)
@@ -553,8 +552,8 @@ class CrawlerApp:
         tree = self.tree
         for c in data:
             tree.insert("", tk.END, values=(
-                c.platform, c.name, c.industry, c.scale, c.stage,
-                c.hot_jobs, c.salary, c.location,
+                c.platform, c.name, c.industry, c.scale, c.location,
+                c.contact_person, c.contact_info,
             ))
 
     def _update_progress(self, current, total):
@@ -625,9 +624,9 @@ class CrawlerApp:
         fields = [
             ("来源平台", c.platform), ("公司名称", c.name),
             ("行业", c.industry), ("公司规模", c.scale),
-            ("融资阶段", c.stage), ("公司简介", c.description),
-            ("地点", c.location), ("热招岗位", c.hot_jobs),
-            ("薪资范围", c.salary),
+            ("地点", c.location),
+            ("联系人", c.contact_person), ("联系方式", c.contact_info),
+            ("公司简介", c.description),
         ]
 
         y = 16
@@ -674,11 +673,16 @@ class CrawlerApp:
             else:
                 with open(path, "w", encoding="utf-8-sig", newline="") as f:
                     writer = csv.writer(f)
-                    writer.writerow(["平台", "公司名称", "行业", "规模", "融资阶段",
-                                     "公司简介", "地点", "热招岗位", "薪资范围"])
+                    writer.writerow([
+                        "平台", "公司名称", "行业", "规模", "地点",
+                        "联系人", "联系方式", "公司简介",
+                    ])
                     for c in self.results:
-                        writer.writerow(c.to_list())
-            messagebox.showinfo("成功", f"已导出 {len(self.results)} 条数据至：\n{path}")
+                        writer.writerow([
+                            c.platform, c.name, c.industry, c.scale, c.location,
+                            c.contact_person, c.contact_info, c.description,
+                        ])
+            messagebox.showinfo("成功", f"已导出 {len(self.results)} 家公司至：\n{path}")
         except Exception as e:
             messagebox.showerror("导出失败", str(e))
 
