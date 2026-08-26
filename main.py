@@ -25,6 +25,10 @@ def _ensure_deps():
         import webdriver_manager  # noqa: F401
     except ImportError:
         missing.append("webdriver-manager")
+    try:
+        import undetected_chromedriver  # noqa: F401
+    except ImportError:
+        missing.append("undetected-chromedriver")
 
     if missing:
         print(f"正在安装缺失依赖: {', '.join(missing)} ...")

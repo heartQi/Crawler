@@ -237,7 +237,7 @@ PLATFORM_CONFIG = {
                     ".pager_next, button[aria-label*='下一页']:not([disabled])",
         "empty_css": ".search-no-result, .empty-position",
         "parse_fn": parse_lagou_item,
-        "captcha_keywords": ["滑动验证", "验证码", "geetest", "slide"],
+        "captcha_keywords": ["滑动验证", "验证码", "访问验证", "验证失败", "geetest", "slide"],
         "method": "browser",
         "page_delay": (5, 8),
     },

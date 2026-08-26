@@ -33,6 +33,7 @@ from .config import (
 from .cookie import CookieManager
 from .models import CompanyInfo, CrawlResult
 from .parsers import PLATFORM_CONFIG
+from .stealth import USER_AGENT, apply_stealth, gentle_scroll, human_pause, warm_up_lagou
 
 def _detect_chromedriver_path() -> Optional[str]:
     path = shutil.which("chromedriver")
@@ -55,7 +56,7 @@ def _detect_chromedriver_path() -> Optional[str]:
     return None
 
 
-def _create_driver(headless: bool = BROWSER_HEADLESS) -> webdriver.Chrome:
+def _build_chrome_options(headless: bool = BROWSER_HEADLESS) -> Options:
     opts = Options()
     if headless:
         opts.add_argument("--headless=new")
@@ -65,7 +66,10 @@ def _create_driver(headless: bool = BROWSER_HEADLESS) -> webdriver.Chrome:
     opts.add_argument("--window-size=1440,900")
     opts.add_argument(f"--user-data-dir={BROWSER_PROFILE_DIR}")
     opts.add_argument("--profile-directory=Default")
+    opts.add_argument("--disable-infobars")
+    opts.add_argument("--disable-blink-features=AutomationControlled")
     opts.add_experimental_option("excludeSwitches", ["enable-logging", "enable-automation"])
+    opts.add_experimental_option("useAutomationExtension", False)
     opts.add_experimental_option(
         "prefs",
         {
@@ -73,59 +77,74 @@ def _create_driver(headless: bool = BROWSER_HEADLESS) -> webdriver.Chrome:
             "profile.password_manager_enabled": False,
         },
     )
-    opts.add_argument(
-        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-    )
+    opts.add_argument(f"user-agent={USER_AGENT}")
+    return opts
 
-    # ── 反检测设置 ──
-    opts.add_argument("--disable-blink-features=AutomationControlled")
-    opts.add_experimental_option("useAutomationExtension", False)
 
-    # ── 注入反检测 CDP 脚本 ──
-    _ANTI_DETECT_JS = """
-    Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-    Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
-    Object.defineProperty(navigator, 'languages', {get: () => ['zh-CN','zh','en']});
-    """
+def _finalize_driver(driver: webdriver.Chrome) -> webdriver.Chrome:
+    apply_stealth(driver)
+    driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT)
+    return driver
 
-    def _apply_anti_detect(drv: webdriver.Chrome) -> webdriver.Chrome:
-        drv.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
-            "source": _ANTI_DETECT_JS,
-        })
-        drv.set_page_load_timeout(PAGE_LOAD_TIMEOUT)
-        return drv
 
-    # 1: webdriver-manager
+def _create_driver(headless: bool = BROWSER_HEADLESS) -> webdriver.Chrome:
+    """优先 undetected-chromedriver（隐藏顶部自动化提示），失败则回退标准 Selenium。"""
+    # 1: undetected-chromedriver — 专门规避「Chrome 正受到自动测试软件的控制」
     try:
-        from webdriver_manager.chrome import ChromeDriverManager
-        svc = ChromeDriverManager().install()
-        driver = webdriver.Chrome(service=Service(svc), options=opts)
-        return _apply_anti_detect(driver)
+        import undetected_chromedriver as uc
+
+        options = uc.ChromeOptions()
+        if headless:
+            options.add_argument("--headless=new")
+        options.add_argument("--window-size=1440,900")
+        options.add_argument("--disable-infobars")
+        options.add_argument("--disable-blink-features=AutomationControlled")
+        options.add_argument(f"user-agent={USER_AGENT}")
+
+        driver = uc.Chrome(
+            options=options,
+            user_data_dir=BROWSER_PROFILE_DIR,
+            headless=headless,
+            use_subprocess=True,
+        )
+        return _finalize_driver(driver)
     except ImportError:
         pass
     except Exception:
         pass
 
-    # 2: local chromedriver
+    opts = _build_chrome_options(headless)
+
+    # 2: webdriver-manager
+    try:
+        from webdriver_manager.chrome import ChromeDriverManager
+        svc = ChromeDriverManager().install()
+        driver = webdriver.Chrome(service=Service(svc), options=opts)
+        return _finalize_driver(driver)
+    except ImportError:
+        pass
+    except Exception:
+        pass
+
+    # 3: local chromedriver
     cd_path = _detect_chromedriver_path()
     if cd_path:
         try:
             svc = Service(executable_path=cd_path)
             driver = webdriver.Chrome(service=svc, options=opts)
-            return _apply_anti_detect(driver)
+            return _finalize_driver(driver)
         except Exception:
             pass
 
-    # 3: Selenium Manager (Selenium 4.6+)
+    # 4: Selenium Manager (Selenium 4.6+)
     try:
         driver = webdriver.Chrome(options=opts)
-        return _apply_anti_detect(driver)
+        return _finalize_driver(driver)
     except Exception as e:
         raise RuntimeError(
             f"无法创建 Chrome WebDriver: {e}\n"
             "请确认已安装 Google Chrome，且没有其他进程占用项目浏览器配置。\n"
-            "也可以执行：pip install webdriver-manager"
+            "也可以执行：pip install undetected-chromedriver webdriver-manager"
         ) from e
 
 
@@ -178,13 +197,19 @@ class CrawlerEngine:
                 city=city_code,
                 page=1,
             )
+            if platform_key == "lagou":
+                log_callback(f"[{pname}] 先访问首页建立会话，降低验证拦截概率...")
+                warm_up_lagou(driver, stop_check)
+
             driver.get(first_url)
+            human_pause(1.2, 2.4)
 
             # 检测反爬验证页面
             if self._detect_captcha(driver, cfg, log_callback):
                 if login_confirmation:
-                    log_callback(f"[{pname}] 检测到验证页面，请手动完成验证...")
-                    if not login_confirmation(pname, 120):
+                    log_callback(f"[{pname}] 检测到验证页面，请在浏览器中手动完成验证...")
+                    wait_sec = 180 if cfg.get("captcha_keywords") else 120
+                    if not login_confirmation(pname, wait_sec):
                         return CrawlResult([], CRAWL_BLOCKED,
                             f"{pname} 页面被拦截。页面标题：{driver.title}")
                     driver.get(first_url)
@@ -249,7 +274,7 @@ class CrawlerEngine:
     @staticmethod
     def _detect_captcha(driver, cfg, log_callback=None) -> bool:
         """检测页面是否被反爬验证/安全中心拦截。"""
-        time.sleep(0.5)
+        time.sleep(0.6)
         title = (driver.title or "").lower()
         url = (driver.current_url or "").lower()
         keywords = cfg.get("captcha_keywords", [])
@@ -258,6 +283,15 @@ class CrawlerEngine:
                 if log_callback:
                     log_callback(f"[验证检测] 匹配关键字 '{kw}' 触发")
                 return True
+        try:
+            body_text = driver.find_element(By.TAG_NAME, "body").text[:500]
+            for kw in keywords:
+                if kw in body_text:
+                    if log_callback:
+                        log_callback(f"[验证检测] 页面内容匹配 '{kw}'")
+                    return True
+        except WebDriverException:
+            pass
         return False
 
     def _wait_for_items(self, driver, cfg):
@@ -276,14 +310,7 @@ class CrawlerEngine:
         return bool(empty_css and driver.find_elements(By.CSS_SELECTOR, empty_css))
 
     def _scroll_for_lazy_load(self, driver, event: Event) -> None:
-        for ratio in (0.35, 0.7, 1.0):
-            if event.is_set():
-                return
-            driver.execute_script(
-                "window.scrollTo(0, document.body.scrollHeight * arguments[0]);",
-                ratio,
-            )
-            self._interruptible_delay(event)
+        gentle_scroll(driver, stop_check=event.is_set)
 
     @staticmethod
     def _parse_page(items, cfg, seen) -> List[CompanyInfo]:
