@@ -98,13 +98,11 @@ def human_pause(min_s: float = 0.8, max_s: float = 2.0) -> None:
 
 
 def warm_up_lagou(driver: "WebDriver", stop_check=None) -> None:
-    """拉勾：先访问首页建立正常会话，再进入搜索页。"""
+    """拉勾：访问首页建立 Cookie，尽量减少自动化动作。"""
     if stop_check and stop_check():
         return
     driver.get("https://www.lagou.com/")
-    human_pause(2.0, 3.5)
-    gentle_scroll(driver, stop_check)
-    human_pause(0.8, 1.6)
+    human_pause(2.5, 4.0)
 
 
 def gentle_scroll(driver: "WebDriver", stop_check=None) -> None:

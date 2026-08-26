@@ -345,7 +345,9 @@ class CrawlerApp:
         """在后台线程中执行 Boss 登录流程。"""
         try:
             from .auth import LoginCoordinator
-            driver = self.engine._get_driver()
+            driver = self.engine._ensure_driver(
+                "boss", None, lambda msg: print(msg), "Boss直聘",
+            )
             auth = LoginCoordinator(
                 driver, self._stop_event,
                 log=lambda msg: print(msg),
@@ -385,20 +387,21 @@ class CrawlerApp:
             return
         dlg = tk.Toplevel(self.root)
         self._login_dialog = dlg
-        dlg.title(f"{platform_name} 人工登录")
-        dlg.geometry("500x230")
+        dlg.title(f"{platform_name} 手动验证")
+        dlg.geometry("520x260")
         dlg.configure(bg=CARD_BG)
         dlg.transient(self.root)
         dlg.attributes("-topmost", True)
 
         self._make_label(
-            dlg, text="请在已打开的 Chrome 浏览器中完成操作",
+            dlg, text="请在已打开的 Chrome 窗口中完成验证",
             font=self.FONT_BOLD_13, bg=CARD_BG, fg=TEXT_DARK,
         ).pack(pady=(22, 10))
         self._make_label(
             dlg,
-            text="如果需要，请自行完成登录、短信验证、滑块验证或安全验证；\n"
-                 "确认网页已正常显示后，再点击“已完成”。",
+            text="程序已打开普通 Chrome（无「自动化控制」提示）。\n"
+                 "请在该窗口完成滑块/安全验证；若失败请先点浏览器刷新再重试。\n"
+                 "确认页面正常显示后，再点击「已完成」。",
             font=self.FONT_10, bg=CARD_BG, fg=TEXT_LIGHT,
             justify=tk.LEFT,
         ).pack(padx=24)

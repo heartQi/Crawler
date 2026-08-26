@@ -1,4 +1,5 @@
 .browser_profile/
+.manual_browser/
 .cookies.json
 __pycache__/
 *.py[cod]

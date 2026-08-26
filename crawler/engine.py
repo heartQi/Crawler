@@ -19,6 +19,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
 from .auth import Credentials, LoginCoordinator
+from .browser import attach_to_chrome, is_debug_port_open, launch_manual_chrome
 from .config import (
     BROWSER_HEADLESS,
     BROWSER_PROFILE_DIR,
@@ -27,13 +28,19 @@ from .config import (
     MAX_PAGES,
     PAGE_LOAD_TIMEOUT,
     PLATFORMS,
+    REMOTE_CHROME_PLATFORMS,
     CRAWL_BLOCKED,
     CRAWL_OK,
 )
 from .cookie import CookieManager
 from .models import CompanyInfo, CrawlResult
 from .parsers import PLATFORM_CONFIG
-from .stealth import USER_AGENT, apply_stealth, gentle_scroll, human_pause, warm_up_lagou
+from .stealth import USER_AGENT, apply_stealth, gentle_scroll, human_pause
+
+MANUAL_START_URLS = {
+    "lagou": "https://www.lagou.com/",
+    "liepin": "https://www.liepin.com/",
+}
 
 def _detect_chromedriver_path() -> Optional[str]:
     path = shutil.which("chromedriver")
@@ -82,6 +89,7 @@ def _build_chrome_options(headless: bool = BROWSER_HEADLESS) -> Options:
 
 
 def _finalize_driver(driver: webdriver.Chrome) -> webdriver.Chrome:
+    """标准 Selenium 驱动注入 stealth；uc 驱动请勿调用。"""
     apply_stealth(driver)
     driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT)
     return driver
@@ -89,7 +97,7 @@ def _finalize_driver(driver: webdriver.Chrome) -> webdriver.Chrome:
 
 def _create_driver(headless: bool = BROWSER_HEADLESS) -> webdriver.Chrome:
     """优先 undetected-chromedriver（隐藏顶部自动化提示），失败则回退标准 Selenium。"""
-    # 1: undetected-chromedriver — 专门规避「Chrome 正受到自动测试软件的控制」
+    # 1: undetected-chromedriver — 内置反检测，不再叠加 CDP stealth（会干扰滑块验证）
     try:
         import undetected_chromedriver as uc
 
@@ -98,7 +106,6 @@ def _create_driver(headless: bool = BROWSER_HEADLESS) -> webdriver.Chrome:
             options.add_argument("--headless=new")
         options.add_argument("--window-size=1440,900")
         options.add_argument("--disable-infobars")
-        options.add_argument("--disable-blink-features=AutomationControlled")
         options.add_argument(f"user-agent={USER_AGENT}")
 
         driver = uc.Chrome(
@@ -107,7 +114,8 @@ def _create_driver(headless: bool = BROWSER_HEADLESS) -> webdriver.Chrome:
             headless=headless,
             use_subprocess=True,
         )
-        return _finalize_driver(driver)
+        driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT)
+        return driver
     except ImportError:
         pass
     except Exception:
@@ -155,11 +163,54 @@ class CrawlerEngine:
         self.cookie_mgr = CookieManager()
         self._platforms = list(PLATFORM_CONFIG.keys())
         self._driver: Optional[webdriver.Chrome] = None
+        self._driver_mode: Optional[str] = None  # "auto" | "attach"
         self.headless = headless
 
-    def _get_driver(self) -> webdriver.Chrome:
+    def _reset_driver(self) -> None:
+        if self._driver:
+            try:
+                self._driver.quit()
+            except Exception:
+                pass
+        self._driver = None
+        self._driver_mode = None
+
+    def _ensure_driver(
+        self,
+        platform_key: str,
+        login_confirmation,
+        log_callback: Callable[[str], None],
+        pname: str,
+    ) -> webdriver.Chrome:
+        """强验证平台用普通 Chrome + 调试端口附着，其它平台用自动化驱动。"""
+        if platform_key in REMOTE_CHROME_PLATFORMS:
+            if self._driver_mode != "attach":
+                self._reset_driver()
+                start_url = MANUAL_START_URLS.get(platform_key, "about:blank")
+                log_callback(
+                    f"[{pname}] 正在打开普通 Chrome（无自动化控制条），"
+                    f"请在该窗口手动完成验证..."
+                )
+                if not is_debug_port_open():
+                    launch_manual_chrome(start_url=start_url)
+                else:
+                    log_callback(f"[{pname}] 检测到已有调试 Chrome，直接连接...")
+
+                if not login_confirmation:
+                    raise RuntimeError(f"{pname} 需要手动验证，但程序未提供确认回调")
+                if not login_confirmation(pname, 300):
+                    raise RuntimeError(f"{pname} 未完成手动验证")
+
+                self._driver = attach_to_chrome()
+                self._driver_mode = "attach"
+                log_callback(f"[{pname}] 已连接浏览器，开始查询...")
+            return self._driver
+
+        if self._driver_mode == "attach":
+            self._reset_driver()
         if self._driver is None:
             self._driver = _create_driver(self.headless)
+            self._driver_mode = "auto"
         return self._driver
 
     def crawl(
@@ -183,9 +234,15 @@ class CrawlerEngine:
         pname = PLATFORMS[platform_key]["name"]
         results: List[CompanyInfo] = []
         seen = set()
-        driver = self._get_driver()
 
         try:
+            try:
+                driver = self._ensure_driver(
+                    platform_key, login_confirmation, log_callback, pname,
+                )
+            except RuntimeError as exc:
+                return CrawlResult([], CRAWL_BLOCKED, str(exc))
+
             if cfg.get("requires_login"):
                 auth = LoginCoordinator(driver, event, log_callback)
                 if not auth.ensure_boss_login(credentials, login_confirmation):
@@ -197,25 +254,19 @@ class CrawlerEngine:
                 city=city_code,
                 page=1,
             )
-            if platform_key == "lagou":
-                log_callback(f"[{pname}] 先访问首页建立会话，降低验证拦截概率...")
-                warm_up_lagou(driver, stop_check)
 
             driver.get(first_url)
-            human_pause(1.2, 2.4)
+            human_pause(2.0, 3.5)
 
-            # 检测反爬验证页面
-            if self._detect_captcha(driver, cfg, log_callback):
-                if login_confirmation:
-                    log_callback(f"[{pname}] 检测到验证页面，请在浏览器中手动完成验证...")
-                    wait_sec = 180 if cfg.get("captcha_keywords") else 120
-                    if not login_confirmation(pname, wait_sec):
-                        return CrawlResult([], CRAWL_BLOCKED,
-                            f"{pname} 页面被拦截。页面标题：{driver.title}")
-                    driver.get(first_url)
-                else:
-                    return CrawlResult([], CRAWL_BLOCKED,
-                        f"{pname} 页面被拦截。页面标题：{driver.title}")
+            if not self._resolve_captcha_page(
+                driver, cfg, pname, first_url, login_confirmation,
+                log_callback, stop_check,
+            ):
+                return CrawlResult(
+                    [],
+                    CRAWL_BLOCKED,
+                    f"{pname} 验证未通过。页面标题：{driver.title}",
+                )
 
             last_signature = None
             completed_pages = 0
@@ -224,6 +275,13 @@ class CrawlerEngine:
                     return CrawlResult(results, CRAWL_OK, f"用户中止，已获取 {len(results)} 条")
 
                 items = self._wait_for_items(driver, cfg)
+                if not items and self._detect_captcha(driver, cfg, log_callback):
+                    log_callback(f"[{pname}] 第 {page} 页仍被验证拦截，请再次完成验证...")
+                    if self._resolve_captcha_page(
+                        driver, cfg, pname, first_url, login_confirmation,
+                        log_callback, stop_check,
+                    ):
+                        items = self._wait_for_items(driver, cfg)
                 if not items:
                     if self._has_empty_state(driver, cfg):
                         log_callback(f"[{pname}] 第 {page} 页没有结果")
@@ -273,19 +331,29 @@ class CrawlerEngine:
 
     @staticmethod
     def _detect_captcha(driver, cfg, log_callback=None) -> bool:
-        """检测页面是否被反爬验证/安全中心拦截。"""
-        time.sleep(0.6)
-        title = (driver.title or "").lower()
-        url = (driver.current_url or "").lower()
-        keywords = cfg.get("captcha_keywords", [])
-        for kw in keywords:
-            if kw.lower() in title or kw.lower() in url:
+        """检测是否处于验证/安全拦截页（避免误匹配页面脚本中的关键字）。"""
+        time.sleep(0.4)
+        title = driver.title or ""
+
+        for kw in cfg.get("captcha_title_keywords", []):
+            if kw in title:
                 if log_callback:
-                    log_callback(f"[验证检测] 匹配关键字 '{kw}' 触发")
+                    log_callback(f"[验证检测] 标题匹配 '{kw}'")
                 return True
+
+        captcha_css = cfg.get("captcha_css", "")
+        if captcha_css:
+            try:
+                if driver.find_elements(By.CSS_SELECTOR, captcha_css):
+                    if log_callback:
+                        log_callback("[验证检测] 发现验证组件")
+                    return True
+            except WebDriverException:
+                pass
+
         try:
-            body_text = driver.find_element(By.TAG_NAME, "body").text[:500]
-            for kw in keywords:
+            body_text = driver.find_element(By.TAG_NAME, "body").text
+            for kw in cfg.get("captcha_body_keywords", []):
                 if kw in body_text:
                     if log_callback:
                         log_callback(f"[验证检测] 页面内容匹配 '{kw}'")
@@ -293,6 +361,55 @@ class CrawlerEngine:
         except WebDriverException:
             pass
         return False
+
+    def _resolve_captcha_page(
+        self,
+        driver,
+        cfg,
+        pname: str,
+        target_url: str,
+        login_confirmation,
+        log_callback,
+        stop_check,
+    ) -> bool:
+        """等待用户手动完成验证，支持刷新后重试。"""
+        if not self._detect_captcha(driver, cfg, log_callback):
+            return True
+        if not login_confirmation:
+            return False
+
+        wait_sec = 180 if (
+            cfg.get("captcha_keywords")
+            or cfg.get("captcha_body_keywords")
+            or cfg.get("captcha_title_keywords")
+        ) else 120
+        max_rounds = 5
+        for round_i in range(max_rounds):
+            if stop_check():
+                return False
+            if not self._detect_captcha(driver, cfg):
+                log_callback(f"[{pname}] 验证已通过，继续查询...")
+                return True
+
+            if round_i == 0:
+                log_callback(
+                    f"[{pname}] 检测到验证页，请在浏览器中完成滑块/验证；"
+                    f"若提示失败请先点刷新再重试"
+                )
+            else:
+                log_callback(f"[{pname}] 验证仍未通过（第 {round_i + 1}/{max_rounds} 次）...")
+
+            if not login_confirmation(pname, wait_sec):
+                return False
+
+            human_pause(1.0, 2.0)
+            try:
+                driver.refresh()
+            except WebDriverException:
+                driver.get(target_url)
+            human_pause(2.5, 4.0)
+
+        return not self._detect_captcha(driver, cfg, log_callback)
 
     def _wait_for_items(self, driver, cfg):
         try:
@@ -384,9 +501,4 @@ class CrawlerEngine:
         event.wait(random.uniform(*HUMAN_DELAY_RANGE))
 
     def close(self):
-        if self._driver:
-            try:
-                self._driver.quit()
-            except Exception:
-                pass
-            self._driver = None
+        self._reset_driver()

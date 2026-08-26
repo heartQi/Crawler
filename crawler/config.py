@@ -22,6 +22,10 @@ COOKIE_FILE = os.path.join(
 )
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BROWSER_PROFILE_DIR = os.path.join(PROJECT_DIR, ".browser_profile")
+MANUAL_BROWSER_PROFILE_DIR = os.path.join(PROJECT_DIR, ".manual_browser")
+REMOTE_DEBUG_PORT = 9222
+# 强验证站点：用普通 Chrome 手动过验证后再附着，避免 WebDriver 启动被识别
+REMOTE_CHROME_PLATFORMS = frozenset({"lagou", "liepin"})
 
 # Selenium 可见浏览器参数
 BROWSER_HEADLESS = False
