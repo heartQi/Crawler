@@ -65,7 +65,7 @@ def _create_driver(headless: bool = BROWSER_HEADLESS) -> webdriver.Chrome:
     opts.add_argument("--window-size=1440,900")
     opts.add_argument(f"--user-data-dir={BROWSER_PROFILE_DIR}")
     opts.add_argument("--profile-directory=Default")
-    opts.add_experimental_option("excludeSwitches", ["enable-logging"])
+    opts.add_experimental_option("excludeSwitches", ["enable-logging", "enable-automation"])
     opts.add_experimental_option(
         "prefs",
         {
@@ -78,13 +78,30 @@ def _create_driver(headless: bool = BROWSER_HEADLESS) -> webdriver.Chrome:
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
     )
 
+    # ── 反检测设置 ──
+    opts.add_argument("--disable-blink-features=AutomationControlled")
+    opts.add_experimental_option("useAutomationExtension", False)
+
+    # ── 注入反检测 CDP 脚本 ──
+    _ANTI_DETECT_JS = """
+    Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+    Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
+    Object.defineProperty(navigator, 'languages', {get: () => ['zh-CN','zh','en']});
+    """
+
+    def _apply_anti_detect(drv: webdriver.Chrome) -> webdriver.Chrome:
+        drv.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+            "source": _ANTI_DETECT_JS,
+        })
+        drv.set_page_load_timeout(PAGE_LOAD_TIMEOUT)
+        return drv
+
     # 1: webdriver-manager
     try:
         from webdriver_manager.chrome import ChromeDriverManager
         svc = ChromeDriverManager().install()
         driver = webdriver.Chrome(service=Service(svc), options=opts)
-        driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT)
-        return driver
+        return _apply_anti_detect(driver)
     except ImportError:
         pass
     except Exception:
@@ -96,16 +113,14 @@ def _create_driver(headless: bool = BROWSER_HEADLESS) -> webdriver.Chrome:
         try:
             svc = Service(executable_path=cd_path)
             driver = webdriver.Chrome(service=svc, options=opts)
-            driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT)
-            return driver
+            return _apply_anti_detect(driver)
         except Exception:
             pass
 
     # 3: Selenium Manager (Selenium 4.6+)
     try:
         driver = webdriver.Chrome(options=opts)
-        driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT)
-        return driver
+        return _apply_anti_detect(driver)
     except Exception as e:
         raise RuntimeError(
             f"无法创建 Chrome WebDriver: {e}\n"
@@ -165,6 +180,18 @@ class CrawlerEngine:
             )
             driver.get(first_url)
 
+            # 检测反爬验证页面
+            if self._detect_captcha(driver, cfg, log_callback):
+                if login_confirmation:
+                    log_callback(f"[{pname}] 检测到验证页面，请手动完成验证...")
+                    if not login_confirmation(pname, 120):
+                        return CrawlResult([], CRAWL_BLOCKED,
+                            f"{pname} 页面被拦截。页面标题：{driver.title}")
+                    driver.get(first_url)
+                else:
+                    return CrawlResult([], CRAWL_BLOCKED,
+                        f"{pname} 页面被拦截。页面标题：{driver.title}")
+
             last_signature = None
             completed_pages = 0
             for page in range(1, MAX_PAGES + 1):
@@ -213,11 +240,25 @@ class CrawlerEngine:
                 f"{pname} 页面已打开，但未提取到数据。页面标题：{driver.title}",
             )
         except Exception as exc:
-            log_callback(f"[{pname}] 采集异常：{exc}")
-            return CrawlResult([], CRAWL_BLOCKED, f"{pname} 采集异常：{exc}")
+            log_callback(f"[{pname}] 查询异常：{exc}")
+            return CrawlResult([], CRAWL_BLOCKED, f"{pname} 查询异常：{exc}")
         finally:
             if credentials is not None:
                 credentials.clear()
+
+    @staticmethod
+    def _detect_captcha(driver, cfg, log_callback=None) -> bool:
+        """检测页面是否被反爬验证/安全中心拦截。"""
+        time.sleep(0.5)
+        title = (driver.title or "").lower()
+        url = (driver.current_url or "").lower()
+        keywords = cfg.get("captcha_keywords", [])
+        for kw in keywords:
+            if kw.lower() in title or kw.lower() in url:
+                if log_callback:
+                    log_callback(f"[验证检测] 匹配关键字 '{kw}' 触发")
+                return True
+        return False
 
     def _wait_for_items(self, driver, cfg):
         try:

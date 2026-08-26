@@ -13,11 +13,11 @@ from .models import CompanyInfo
 
 def parse_zhilian_item(item) -> CompanyInfo | None:
     """解析智联招聘单条职位卡片"""
-    name_el      = item.find_elements(By.CSS_SELECTOR, ".companyinfo__name, .companyinfo a")
-    job_el       = item.find_elements(By.CSS_SELECTOR, ".jobinfo__name")
-    salary_el    = item.find_elements(By.CSS_SELECTOR, ".jobinfo__salary")
-    loc_el       = item.find_elements(By.CSS_SELECTOR, ".jobinfo__demand__item--workaddress")
-    compinfo_els = item.find_elements(By.CSS_SELECTOR, ".companyinfo__demand__item")
+    name_el      = item.find_elements(By.CSS_SELECTOR, ".companyinfo__name, .companyinfo a, [class*=companyname], .company-name")
+    job_el       = item.find_elements(By.CSS_SELECTOR, ".jobinfo__name, .job-name, .job-title, [class*=jobname]")
+    salary_el    = item.find_elements(By.CSS_SELECTOR, ".jobinfo__salary, .salary, [class*=salary]")
+    loc_el       = item.find_elements(By.CSS_SELECTOR, ".jobinfo__demand__item--workaddress, .job-area, [class*=address]")
+    compinfo_els = item.find_elements(By.CSS_SELECTOR, ".companyinfo__demand__item, [class*=companyinfo] [class*=item]")
 
     comp_name = name_el[0].text.strip() if name_el else ""
     job_name  = job_el[0].text.strip()  if job_el  else ""
@@ -82,7 +82,7 @@ def parse_51job_item(item) -> CompanyInfo | None:
                 stage = line
 
     comp_els = item.find_elements(By.CSS_SELECTOR,
-        ".companyinfo-text, .companyinfo__name, [class*=company] a")
+        ".companyinfo-text, .companyinfo__name, [class*=company] a, .company-name")
     if comp_els:
         comp_name = comp_els[0].text.strip()
     if not comp_name:
@@ -104,10 +104,10 @@ def parse_51job_item(item) -> CompanyInfo | None:
 
 def parse_boss_item(item) -> CompanyInfo | None:
     """解析 Boss直聘单条职位卡片"""
-    name_els = item.find_elements(By.CSS_SELECTOR, ".company-name, .name")
-    job_els  = item.find_elements(By.CSS_SELECTOR, ".job-name, .job-title")
-    sal_els  = item.find_elements(By.CSS_SELECTOR, ".salary, .job-info .salary")
-    area_els = item.find_elements(By.CSS_SELECTOR, ".job-area, .job-info .area")
+    name_els = item.find_elements(By.CSS_SELECTOR, ".company-name, .name, [class*=company]")
+    job_els  = item.find_elements(By.CSS_SELECTOR, ".job-name, .job-title, [class*=job-name]")
+    sal_els  = item.find_elements(By.CSS_SELECTOR, ".salary, .job-info .salary, [class*=salary]")
+    area_els = item.find_elements(By.CSS_SELECTOR, ".job-area, .job-info .area, [class*=area]")
 
     comp = name_els[0].text.strip() if name_els else ""
     if not comp:
@@ -127,19 +127,19 @@ def parse_lagou_item(item) -> CompanyInfo | None:
     """解析拉勾网单条职位卡片"""
     name_els = item.find_elements(
         By.CSS_SELECTOR,
-        ".company-name__2-SjF, .company-name, [class*=companyName]",
+        ".company-name__2-SjF, .company-name, [class*=companyName], [class*=company-name], .con_list_item .company_name",
     )
     job_els = item.find_elements(
         By.CSS_SELECTOR,
-        ".position-name__2Kw3s, .position-name, [class*=positionName]",
+        ".position-name__2Kw3s, .position-name, [class*=positionName], .con_list_item .job-name",
     )
     sal_els = item.find_elements(
         By.CSS_SELECTOR,
-        ".salary__13530, .money, [class*=salary]",
+        ".salary__13530, .money, [class*=salary], .con_list_item .salary",
     )
     info_els = item.find_elements(
         By.CSS_SELECTOR,
-        ".industry, [class*=industry]",
+        ".industry, [class*=industry], .con_list_item .industry",
     )
 
     comp = name_els[0].text.strip() if name_els else ""
@@ -157,10 +157,10 @@ def parse_lagou_item(item) -> CompanyInfo | None:
 
 def parse_liepin_item(item) -> CompanyInfo | None:
     """解析猎聘单条职位卡片"""
-    name_els = item.find_elements(By.CSS_SELECTOR, ".company-name, [class*=companyName]")
-    job_els  = item.find_elements(By.CSS_SELECTOR, ".job-title-box .ellipsis-1, [class*=jobTitle]")
-    sal_els  = item.find_elements(By.CSS_SELECTOR, ".job-finance-info .tag, [class*=salary]")
-    info_els = item.find_elements(By.CSS_SELECTOR, ".company-info span, [class*=companyInfo]")
+    name_els = item.find_elements(By.CSS_SELECTOR, ".company-name, [class*=companyName], .job-card .company, .sojob-item .company-name")
+    job_els  = item.find_elements(By.CSS_SELECTOR, ".job-title-box .ellipsis-1, [class*=jobTitle], .sojob-item .job-name, .job-card .job-name")
+    sal_els  = item.find_elements(By.CSS_SELECTOR, ".job-finance-info .tag, [class*=salary], .sojob-item .salary, .job-card .salary")
+    info_els = item.find_elements(By.CSS_SELECTOR, ".company-info span, [class*=companyInfo], .sojob-item .industry")
 
     comp = name_els[0].text.strip() if name_els else ""
     if not comp:
@@ -193,54 +193,65 @@ def parse_liepin_item(item) -> CompanyInfo | None:
 PLATFORM_CONFIG = {
     "zhilian": {
         "url_tpl": "https://sou.zhaopin.com/?kw={kw}&jl={city}&p={page}",
-        "item_css": ".joblist-box__item",
-        "next_css": ".pagination__next:not(.disabled), button.btn-pager-next:not([disabled]), li.next:not(.disabled)",
-        "empty_css": ".joblist-empty, .search-no-result",
+        "item_css": ".joblist-box__item, .positionlist-box li, "
+                    "[class*=joblist] [class*=item], .job-card-item",
+        "next_css": ".pagination__next:not(.disabled), button.btn-pager-next:not([disabled]), "
+                    "li.next:not(.disabled), a[class*=next]:not(.disabled)",
+        "empty_css": ".joblist-empty, .search-no-result, .no-result-panel",
         "parse_fn": parse_zhilian_item,
         "method": "browser",
-        "page_delay": (3, 4.5),
+        "page_delay": (3, 5),
     },
     "51job": {
         "url_tpl": "https://we.51job.com/pc/search?keyword={kw}"
                    "&searchType=2&sortType=0&jobArea={city}&pageNum={page}",
-        "item_css": ".joblist-item",
-        "next_css": ".el-pagination .btn-next:not([disabled]), button.btn-next:not([disabled]), li.next:not(.disabled)",
-        "empty_css": ".no-result, .empty-data",
+        "item_css": ".joblist-item, .job-list-item, "
+                    "[class*=joblist] [class*=item]",
+        "next_css": ".el-pagination .btn-next:not([disabled]), button.btn-next:not([disabled]), "
+                    "li.next:not(.disabled), .pagination .next:not(.disabled)",
+        "empty_css": ".no-result, .empty-data, .el-empty",
         "parse_fn": parse_51job_item,
         "method": "browser",
-        "page_delay": (3, 4.5),
+        "page_delay": (3, 5),
     },
     "boss": {
         "url_tpl": "https://www.zhipin.com/web/geek/job?query={kw}&city={city}&page={page}",
         "item_css": ".job-card-wrapper, .job-card-body, "
                     ".search-job-result .job-list-box li, [class*=job-card]",
         "next_css": ".options-pages a:last-child:not(.disabled), .pagination a.next:not(.disabled), "
-                    "button[aria-label='下一页']:not([disabled])",
+                    "button[aria-label='下一页']:not([disabled]), .page-next:not(.disabled)",
         "empty_css": ".job-empty, .empty-page, .search-empty",
         "parse_fn": parse_boss_item,
         "method": "browser",
         "requires_login": True,
-        "page_delay": (4, 6),
+        "page_delay": (4, 7),
     },
     "lagou": {
         "url_tpl": "https://www.lagou.com/wn/search/?kd={kw}&pn={page}",
         "item_css": ".item__10RTO, [class*=ItemList] > div, "
-                    "[class*=job-list] li, .position-list .item",
+                    "[class*=job-list] li, .position-list .item, "
+                    ".position-item, [class*=position-item], [class*=job-item], "
+                    ".con_list_item, .default-list>.item",
         "next_css": ".lg-pagination-next:not(.lg-pagination-disabled), "
-                    ".pager_next:not(.pager_next_disabled), button[aria-label='下一页']:not([disabled])",
+                    ".pager_next:not(.pager_next_disabled), "
+                    ".pager_next, button[aria-label*='下一页']:not([disabled])",
         "empty_css": ".search-no-result, .empty-position",
         "parse_fn": parse_lagou_item,
+        "captcha_keywords": ["滑动验证", "验证码", "geetest", "slide"],
         "method": "browser",
-        "page_delay": (4, 6),
+        "page_delay": (5, 8),
     },
     "liepin": {
         "url_tpl": "https://www.liepin.com/zhaopin/?key={kw}&curPage={page}",
-        "item_css": ".job-card-pc-container, [class*=job-card], [class*=JobCard]",
+        "item_css": ".job-card-pc-container, [class*=job-card], [class*=JobCard], "
+                    ".job-list-item, .job-card, .sojob-list li, .job-list li",
         "next_css": ".ant-pagination-next:not(.ant-pagination-disabled) button, "
-                    "li.next:not(.disabled), button[aria-label='下一页']:not([disabled])",
+                    "li.next:not(.disabled), button[aria-label='下一页']:not([disabled]), "
+                    ".pagination__next:not(.disabled)",
         "empty_css": ".ant-empty, .no-data",
         "parse_fn": parse_liepin_item,
+        "captcha_keywords": ["安全中心", "验证", "captcha"],
         "method": "browser",
-        "page_delay": (4, 6),
+        "page_delay": (5, 8),
     },
 }

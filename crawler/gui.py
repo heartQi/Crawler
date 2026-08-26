@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-GUI 应用 — 招聘平台公司信息爬虫
+GUI 应用 — 招聘平台公司信息查询
 """
 
 import csv
@@ -27,7 +27,7 @@ from .engine import CrawlerEngine
 
 
 class CrawlerApp:
-    """招聘平台爬虫 GUI 主程序"""
+    """招聘平台公司信息查询 GUI 主程序"""
 
     PLACEHOLDER_TEXT = "请输入搜索关键词，如：Python开发"
     PLACEHOLDER_FG   = "#B0B8C1"
@@ -47,7 +47,7 @@ class CrawlerApp:
         self._login_dialog = None
 
         self.root = tk.Tk()
-        self.root.title("招聘平台公司信息爬虫")
+        self.root.title("招聘平台公司信息查询")
         self.root.geometry("1100x720")
         self.root.minsize(900, 600)
         self.root.configure(bg=BG)
@@ -106,7 +106,7 @@ class CrawlerApp:
         header.pack_propagate(False)
 
         self._make_label(
-            header, text="招聘平台公司信息爬虫",
+            header, text="招聘平台公司信息查询",
             font=self.FONT_BOLD_18, bg=PRIMARY, fg="white",
         ).pack(side=tk.LEFT, padx=20, pady=12)
 
@@ -194,7 +194,7 @@ class CrawlerApp:
         self.city_combo.pack(side=tk.LEFT, padx=(4, 12))
 
         self.crawl_btn = tk.Button(
-            sf, text="开始爬取", font=self.FONT_BOLD_13,
+            sf, text="开始查询", font=self.FONT_BOLD_13,
             bg=PRIMARY, fg="white", activebackground="#3A7BC8",
             relief=tk.FLAT, padx=20, pady=4, cursor="hand2",
             command=self._start_crawl,
@@ -222,7 +222,7 @@ class CrawlerApp:
         container.pack(fill=tk.BOTH, expand=True, padx=16, pady=(4, 4))
 
         self.info_label = self._make_label(
-            container, text="尚未爬取，请选择平台并点击开始爬取",
+            container, text="尚未查询，请选择平台并点击开始查询",
             font=self.FONT_11, bg=BG, fg=TEXT_LIGHT,
         )
         self.info_label.pack(anchor=tk.W, pady=(4, 2))
@@ -392,13 +392,13 @@ class CrawlerApp:
         dlg.attributes("-topmost", True)
 
         self._make_label(
-            dlg, text="请在已打开的 Chrome 浏览器中完成登录",
+            dlg, text="请在已打开的 Chrome 浏览器中完成操作",
             font=self.FONT_BOLD_13, bg=CARD_BG, fg=TEXT_DARK,
         ).pack(pady=(22, 10))
         self._make_label(
             dlg,
-            text="程序已尝试预填账号字段。请自行选择登录方式并完成短信、滑块或验证码；\n"
-                 "确认网页已登录后，再点击“已完成登录”。",
+            text="如果需要，请自行完成登录、短信验证、滑块验证或安全验证；\n"
+                 "确认网页已正常显示后，再点击“已完成”。",
             font=self.FONT_10, bg=CARD_BG, fg=TEXT_LIGHT,
             justify=tk.LEFT,
         ).pack(padx=24)
@@ -415,7 +415,7 @@ class CrawlerApp:
             dlg.destroy()
 
         tk.Button(
-            buttons, text="已完成登录", command=done,
+            buttons, text="已完成", command=done,
             font=self.FONT_BOLD_11, bg=ACCENT, fg="white",
             relief=tk.FLAT, padx=20, pady=5,
         ).pack(side=tk.LEFT, padx=8)
@@ -446,7 +446,7 @@ class CrawlerApp:
             return ""
         return self.keyword_entry.get().strip()
 
-    # ──────────── 爬取控制 ────────────
+    # ──────────── 查询控制 ────────────
 
     def _start_crawl(self):
         selected = [k for k, v in self.platform_vars.items() if v.get()]
@@ -466,9 +466,9 @@ class CrawlerApp:
         self._stop_event.clear()
         if "boss" in selected and self._boss_credentials is None and not self._boss_logged_in:
             self._boss_credentials = Credentials()
-        self.crawl_btn.config(state=tk.DISABLED, text="爬取中...")
+        self.crawl_btn.config(state=tk.DISABLED, text="查询中...")
         self.stop_btn.config(state=tk.NORMAL)
-        self.status_label.config(text=f"爬取中  {city_name}...")
+        self.status_label.config(text=f"查询中  {city_name}...")
         self.results.clear()
         for item in self.tree.get_children():
             self.tree.delete(item)
@@ -492,7 +492,7 @@ class CrawlerApp:
                 return
             pname = PLATFORMS[pk]["name"]
             city_code = city_codes.get(pk, "")
-            self.root.after(0, lambda n=pname: self.progress_label.config(text=f"正在爬取 {n}（全量）..."))
+            self.root.after(0, lambda n=pname: self.progress_label.config(text=f"正在查询 {n}（全量）..."))
             try:
                 result = self.engine.crawl(
                     pk, keyword, city_code=city_code,
@@ -501,7 +501,7 @@ class CrawlerApp:
                     stop_event=self._stop_event,
                     page_callback=self._on_page_collected,
                     credentials=self._boss_credentials if pk == "boss" else None,
-                    login_confirmation=self._wait_for_login_confirmation if pk == "boss" else None,
+                    login_confirmation=self._wait_for_login_confirmation if pk in ("boss", "lagou", "liepin") else None,
                 )
                 if result.status == CRAWL_OK:
                     statuses.append(("ok", f"{pname}: {result.message}"))
@@ -547,7 +547,7 @@ class CrawlerApp:
         self.progress_label.config(text=f"{current}/{total} 平台完成")
 
     def _crawl_done(self, stopped=False, statuses=None):
-        self.crawl_btn.config(state=tk.NORMAL, text="开始爬取")
+        self.crawl_btn.config(state=tk.NORMAL, text="开始查询")
         self.stop_btn.config(state=tk.DISABLED)
         n = len(self.results)
         statuses = statuses or []
@@ -556,7 +556,7 @@ class CrawlerApp:
             self._boss_credentials = None
 
         if stopped:
-            self.info_label.config(text=f"爬取已中止  |  已获取 {n} 条")
+            self.info_label.config(text=f"查询已中止  |  已获取 {n} 条")
             self.status_label.config(text="已中止")
             self.progress_label.config(text="已中止")
         elif statuses:
@@ -566,7 +566,7 @@ class CrawlerApp:
             if blocked_count:
                 summary += f"  {ok_count} 平台成功，{blocked_count} 平台被拦截"
             self.info_label.config(text=summary)
-            self.status_label.config(text="爬取完成")
+            self.status_label.config(text="查询完成")
             self.progress_label.config(text="全部完成")
 
             blocked_msgs = [msg for st, msg in statuses if st == "blocked"]
@@ -575,7 +575,7 @@ class CrawlerApp:
                 ok_names = [msg for st, msg in statuses if st == "ok"]
                 ok_text = "\n".join(ok_names) if ok_names else "无"
                 messagebox.showinfo(
-                    "爬取结果报告",
+                    "查询结果报告",
                     f"【成功平台】\n{ok_text}\n\n"
                     f"【被拦截平台】\n{detail}\n\n"
                     f"共获取 {n} 条招聘数据。"
