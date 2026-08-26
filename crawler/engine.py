@@ -48,6 +48,7 @@ from .lagou_api import (
     format_lagou_error,
     parse_lagou_positions,
 )
+from .lagou_company import fill_contacts_from_company_pages
 from .lagou_pager import (
     find_current_page_lagou_items,
     go_next_lagou_page,
@@ -421,6 +422,7 @@ class CrawlerEngine:
             completed_pages = 0
             page = read_lagou_current_page(driver) or 1
             stuck_streak = 0
+            contact_search_visited: set = set()
 
             while page <= page_limit:
                 if event.is_set() or stop_check():
@@ -453,15 +455,21 @@ class CrawlerEngine:
                     else:
                         stuck_streak = 0
                         last_signature = signature
-                        page_data = self._parse_page(items, cfg, seen)
-                        page_data = self._enrich_lagou_page_data(
+                        page_data = self._parse_lagou_items(items, cfg, seen)
+                        self._enrich_lagou_page_data(
                             driver, keyword, city_name, list_url, page,
                             page_data, log_callback,
+                        )
+                        fill_contacts_from_company_pages(
+                            driver, page_data,
+                            driver.current_url or list_url,
+                            contact_search_visited, log_callback, stop_check,
                         )
                 elif page == 1:
                     log_callback(f"[{pname}] 页面未渲染卡片，接口加载第 1 页...")
                     page_data = self._lagou_fetch_via_ajax(
-                        driver, keyword, city_name, list_url, 1, seen, log_callback,
+                        driver, keyword, city_name, list_url, 1, seen,
+                        log_callback, contact_search_visited, stop_check,
                     )
                 else:
                     log_callback(f"[{pname}] 第 {page} 页未找到职位卡片")
@@ -543,6 +551,23 @@ class CrawlerEngine:
             log_callback(f"[{pname}] 查询异常：{exc}")
             return CrawlResult([], CRAWL_BLOCKED, f"{pname} 查询异常：{exc}")
 
+    def _parse_lagou_items(self, items, cfg, seen) -> List[CompanyInfo]:
+        """解析拉勾列表页。"""
+        page_data: List[CompanyInfo] = []
+        for item in items:
+            try:
+                info = cfg["parse_fn"](item)
+                if not info:
+                    continue
+                key = self._dedupe_key(info, cfg)
+                if key in seen:
+                    continue
+                seen.add(key)
+                page_data.append(info)
+            except Exception:
+                continue
+        return page_data
+
     def _enrich_lagou_page_data(
         self,
         driver,
@@ -552,16 +577,14 @@ class CrawlerEngine:
         page: int,
         page_data: List[CompanyInfo],
         log_callback: Callable[[str], None],
-    ) -> List[CompanyInfo]:
-        """DOM 缺字段时，用同页 Ajax 数据补全行业/规模。"""
+    ) -> Optional[dict]:
+        """DOM 缺字段时，用同页 Ajax 数据补全行业/规模，返回 lookup。"""
         if not page_data:
-            return page_data
+            return None
         needs = [
             c for c in page_data
             if c.industry in ("—", "") or c.scale in ("—", "")
         ]
-        if not needs:
-            return page_data
         try:
             data = fetch_lagou_page_with_retry(
                 driver, keyword, page, city_name, list_url, log_callback,
@@ -569,9 +592,9 @@ class CrawlerEngine:
             )
         except Exception as exc:
             log_callback(f"[拉勾网] 补全第 {page} 页字段失败：{exc}")
-            return page_data
+            return None
         if not data or not data.get("success"):
-            return page_data
+            return None
         positions = (
             data.get("content", {})
             .get("positionResult", {})
@@ -579,12 +602,9 @@ class CrawlerEngine:
         )
         lookup = build_lagou_company_lookup(positions)
         enrich_lagou_companies(page_data, lookup)
-        filled = sum(
-            1 for c in page_data if c.scale not in ("—", "") and c.industry not in ("—", "")
-        )
-        if filled:
+        if needs:
             log_callback(f"[拉勾网] 第 {page} 页接口补全 {len(needs)} 家字段")
-        return page_data
+        return lookup
 
     def _lagou_fetch_via_ajax(
         self,
@@ -595,6 +615,8 @@ class CrawlerEngine:
         page: int,
         seen: set,
         log_callback: Callable[[str], None],
+        contact_search_visited: set,
+        stop_check: Callable[[], bool],
         max_retries: int = 2,
     ) -> List[CompanyInfo]:
         try:
@@ -622,6 +644,15 @@ class CrawlerEngine:
             item.hot_jobs = ""
             item.salary = ""
             page_data.append(item)
+        if not page_data:
+            return []
+        lookup = build_lagou_company_lookup(positions)
+        enrich_lagou_companies(page_data, lookup)
+        fill_contacts_from_company_pages(
+            driver, page_data,
+            driver.current_url or list_url,
+            contact_search_visited, log_callback, stop_check,
+        )
         return page_data
 
     @staticmethod

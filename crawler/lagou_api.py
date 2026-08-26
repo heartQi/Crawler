@@ -171,7 +171,6 @@ def parse_lagou_positions(positions: list) -> List[CompanyInfo]:
         city_val = p.get("city") or ""
         district = p.get("district") or ""
         location = f"{city_val}{district}".strip() or "—"
-        contact_person, contact_info = extract_lagou_contact(p)
         results.append(CompanyInfo(
             platform="拉勾网",
             name=name,
@@ -182,10 +181,16 @@ def parse_lagou_positions(positions: list) -> List[CompanyInfo]:
             location=location,
             hot_jobs="",
             salary="",
-            contact_person=contact_person,
-            contact_info=contact_info,
+            contact_person="",
+            contact_info="",
         ))
     return results
+
+
+def company_url_from_id(company_id) -> str:
+    if company_id:
+        return f"https://www.lagou.com/gongsi/{company_id}.html"
+    return ""
 
 
 def build_lagou_company_lookup(positions: list) -> dict:
@@ -194,13 +199,12 @@ def build_lagou_company_lookup(positions: list) -> dict:
     for p in positions:
         if not isinstance(p, dict):
             continue
-        contact_person, contact_info = extract_lagou_contact(p)
+        company_url = company_url_from_id(p.get("companyId"))
         payload = {
             "industry": (p.get("industryField") or "").strip(),
             "scale": (p.get("companySize") or "").strip(),
             "location": f"{p.get('city') or ''}{p.get('district') or ''}".strip(),
-            "contact_person": contact_person if contact_person != "—" else "",
-            "contact_info": contact_info if contact_info != "—" else "",
+            "company_url": company_url,
         }
         for key in (p.get("companyFullName"), p.get("companyShortName")):
             if key:
@@ -231,7 +235,3 @@ def enrich_lagou_companies(
             company.scale = info.get("scale") or "—"
         if company.location in ("—", "") and info.get("location"):
             company.location = info["location"]
-        if company.contact_person in ("—", "") and info.get("contact_person"):
-            company.contact_person = info["contact_person"]
-        if company.contact_info in ("—", "") and info.get("contact_info"):
-            company.contact_info = info["contact_info"]

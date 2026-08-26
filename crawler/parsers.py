@@ -296,7 +296,6 @@ def parse_lagou_item(item) -> CompanyInfo | None:
     )
     location = _first_text(item, ".add", ".position-area")
     industry, scale = _parse_lagou_meta(item, company_name=comp)
-    contact_person, contact_info = _extract_contact_from_item(item)
 
     if not comp:
         return None
@@ -311,8 +310,8 @@ def parse_lagou_item(item) -> CompanyInfo | None:
         location=location or "—",
         hot_jobs="",
         salary="",
-        contact_person=contact_person,
-        contact_info=contact_info,
+        contact_person="",
+        contact_info="",
     )
 
 
