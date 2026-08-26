@@ -490,12 +490,12 @@ class CrawlerApp:
 
         thread = threading.Thread(
             target=self._crawl_worker,
-            args=(selected, keyword, city_codes),
+            args=(selected, keyword, city_codes, city_name),
             daemon=True,
         )
         thread.start()
 
-    def _crawl_worker(self, platforms, keyword, city_codes):
+    def _crawl_worker(self, platforms, keyword, city_codes, city_name):
         statuses = []
         for i, pk in enumerate(platforms):
             if self._crawl_stop:
@@ -510,7 +510,7 @@ class CrawlerApp:
             self.root.after(0, _set_platform_status)
             try:
                 result = self.engine.crawl(
-                    pk, keyword, city_code=city_code,
+                    pk, keyword, city_code=city_code, city_name=city_name,
                     stop_check=lambda: self._crawl_stop,
                     log_callback=lambda msg: print(msg),
                     stop_event=self._stop_event,

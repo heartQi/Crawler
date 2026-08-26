@@ -39,6 +39,13 @@ from .config import (
 )
 from .cookie import CookieManager
 from .models import CompanyInfo, CrawlResult
+from .lagou_api import (
+    build_list_url,
+    fetch_lagou_page_with_retry,
+    format_lagou_error,
+    is_rate_limited,
+    parse_lagou_positions,
+)
 from .parsers import PLATFORM_CONFIG
 from .stealth import USER_AGENT, apply_stealth, gentle_scroll, human_pause
 
@@ -235,6 +242,7 @@ class CrawlerEngine:
         keyword: str,
         count: int = 0,
         city_code: str = "",
+        city_name: str = "",
         stop_check: Callable[[], bool] = lambda: False,
         log_callback: Callable[[str], None] = print,
         stop_event: Optional[Event] = None,
@@ -244,6 +252,12 @@ class CrawlerEngine:
     ) -> CrawlResult:
         if platform_key not in PLATFORM_CONFIG:
             return CrawlResult([], CRAWL_BLOCKED, f"未知平台: {platform_key}")
+
+        if platform_key == "lagou":
+            return self._crawl_lagou(
+                keyword, city_name, count, stop_check, log_callback,
+                stop_event, page_callback, login_confirmation,
+            )
 
         event = stop_event or Event()
         cfg = PLATFORM_CONFIG[platform_key]
@@ -344,6 +358,122 @@ class CrawlerEngine:
         finally:
             if credentials is not None:
                 credentials.clear()
+
+    def _crawl_lagou(
+        self,
+        keyword: str,
+        city_name: str,
+        count: int,
+        stop_check: Callable[[], bool],
+        log_callback: Callable[[str], None],
+        stop_event: Optional[Event],
+        page_callback,
+        login_confirmation,
+    ) -> CrawlResult:
+        """拉勾职位由 Ajax 加载，在已验证浏览器中调用 positionAjax.json。"""
+        event = stop_event or Event()
+        cfg = PLATFORM_CONFIG["lagou"]
+        pname = PLATFORMS["lagou"]["name"]
+        results: List[CompanyInfo] = []
+        seen = set()
+
+        try:
+            driver = self._ensure_driver(
+                "lagou", login_confirmation, log_callback, pname,
+            )
+            list_url = build_list_url(keyword, city_name)
+            log_callback(f"[{pname}] 打开搜索页: {list_url}")
+            driver.get(list_url)
+            human_pause(2.5, 4.0)
+
+            if not self._resolve_captcha_page(
+                driver, cfg, pname, list_url, login_confirmation,
+                log_callback, stop_check,
+            ):
+                return CrawlResult(
+                    [], CRAWL_BLOCKED,
+                    f"{pname} 验证未通过。页面标题：{driver.title}",
+                )
+
+            completed_pages = 0
+            rate_limited_at = 0
+            for page in range(1, min(MAX_PAGES, 30) + 1):
+                if event.is_set() or stop_check():
+                    return CrawlResult(results, CRAWL_OK, f"用户中止，已获取 {len(results)} 条")
+
+                if page > 1:
+                    delay = random.uniform(8, 14)
+                    log_callback(f"[{pname}] 翻页间隔 {delay:.0f} 秒...")
+                    time.sleep(delay)
+
+                try:
+                    data = fetch_lagou_page_with_retry(
+                        driver, keyword, page, city_name, list_url, log_callback,
+                    )
+                except Exception as exc:
+                    log_callback(f"[{pname}] Ajax 请求异常：{exc}")
+                    break
+
+                if not data or not data.get("success"):
+                    err = format_lagou_error(data)
+                    log_callback(f"[{pname}] 第 {page} 页接口失败：{err}")
+                    if page == 1:
+                        return CrawlResult(
+                            [],
+                            CRAWL_BLOCKED,
+                            f"{pname} 接口未返回数据（可能未通过验证或 Cookie 失效）。"
+                            f"当前页：{driver.title} | {driver.current_url}",
+                        )
+                    if is_rate_limited(data):
+                        rate_limited_at = page
+                    break
+
+                positions = (
+                    data.get("content", {})
+                    .get("positionResult", {})
+                    .get("result", [])
+                )
+                if not positions:
+                    log_callback(f"[{pname}] 第 {page} 页无更多结果")
+                    break
+
+                page_data = []
+                for item in parse_lagou_positions(positions):
+                    key = (item.name, item.hot_jobs, item.location)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    page_data.append(item)
+
+                results.extend(page_data)
+                completed_pages = page
+                log_callback(
+                    f"[{pname}] 第 {page} 页新增 {len(page_data)} 条，累计 {len(results)} 条"
+                )
+                if page_callback:
+                    page_callback(pname, page, page_data, len(results))
+                if count > 0 and len(results) >= count:
+                    results = results[:count]
+                    break
+                if len(positions) < 15:
+                    break
+
+            if results:
+                msg = f"成功获取 {len(results)} 条（共 {completed_pages} 页）"
+                if rate_limited_at:
+                    msg += f"，第 {rate_limited_at} 页起被限流已停止"
+                return CrawlResult(results, CRAWL_OK, msg)
+            return CrawlResult(
+                [],
+                CRAWL_BLOCKED,
+                f"{pname} 未获取到数据。请确认已在浏览器中通过验证，且关键词「{keyword}」有搜索结果。"
+                f"当前：{driver.title}",
+            )
+        except RuntimeError as exc:
+            return CrawlResult([], CRAWL_BLOCKED, str(exc))
+        except Exception as exc:
+            log_callback(f"[{pname}] 查询异常：{exc}")
+            return CrawlResult([], CRAWL_BLOCKED, f"{pname} 查询异常：{exc}")
 
     @staticmethod
     def _detect_captcha(driver, cfg, log_callback=None) -> bool:

@@ -242,7 +242,7 @@ PLATFORM_CONFIG = {
         "captcha_css": "iframe[src*='verify'], iframe[src*='captcha'], "
                        ".geetest_panel, #tcaptcha, [class*='verify-wrap'], [class*='access-verify']",
         "method": "browser",
-        "page_delay": (5, 8),
+        "page_delay": (8, 14),
     },
     "liepin": {
         "url_tpl": "https://www.liepin.com/zhaopin/?key={kw}&curPage={page}",
