@@ -10,7 +10,13 @@ import time
 import urllib.parse
 from typing import Callable, List, Optional
 
-from .browser import safe_get
+from selenium.common.exceptions import TimeoutException, WebDriverException
+from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.support.ui import WebDriverWait
+
+from .browser import safe_get, soft_navigate
 from .models import CompanyInfo
 
 PHONE_RE = re.compile(
@@ -64,7 +70,7 @@ MANUAL_SEARCH_TIMEOUT = 300
 
 
 def build_list_url(keyword: str, city: str = "", page: int = 1) -> str:
-    """拉勾搜索页 URL（用于 Ajax Referer，不用于程序自动打开）。"""
+    """拉勾旧版搜索页 URL（Ajax Referer）。"""
     kw_seg = urllib.parse.quote(keyword)
     url = f"{LIST_URL.format(kw=kw_seg)}?fromSearch=true"
     if city and city != "全国":
@@ -72,6 +78,16 @@ def build_list_url(keyword: str, city: str = "", page: int = 1) -> str:
     if page > 1:
         url += f"&pn={page}"
     return url
+
+
+def build_wn_search_url(keyword: str, city: str = "", page: int = 1) -> str:
+    """拉勾新版 wn/search 搜索页 URL。"""
+    parts = [f"kd={urllib.parse.quote(keyword)}"]
+    if city and city != "全国":
+        parts.append(f"city={urllib.parse.quote(city)}")
+    if page > 1:
+        parts.append(f"pn={page}")
+    return f"{WN_SEARCH_URL}?{'&'.join(parts)}"
 
 
 def is_lagou_blocked_url(url: str = "", title: str = "") -> bool:
@@ -90,7 +106,11 @@ def is_lagou_search_url(url: str, keyword: str = "") -> bool:
     if is_lagou_blocked_url(url):
         return False
     u = url.lower()
-    if "/wn/search" in u or "/jobs/list" in u or "kd=" in u or "key=" in u:
+    if (
+        "/wn/search" in u or "/jobs/list" in u
+        or "/wn/zhaopin" in u or "kd=" in u or "key=" in u
+        or ("/wn/" in u and keyword)
+    ):
         if not keyword:
             return True
         decoded = urllib.parse.unquote(url)
@@ -99,6 +119,399 @@ def is_lagou_search_url(url: str, keyword: str = "") -> bool:
             or urllib.parse.quote(keyword) in url
             or keyword.replace(" ", "") in decoded.replace(" ", "")
         )
+    return False
+
+
+LAGOU_SEARCH_INPUT_SELECTORS = (
+    "input#search_input",
+    "input.search_input",
+    "input[name='kd']",
+    "input[placeholder*='搜索职位']",
+    "input[placeholder*='搜索']",
+    "input[placeholder*='职位']",
+    "input[placeholder*='关键词']",
+    ".search-box input",
+    ".search_input",
+    ".top-search input",
+    "[class*='Search'] input[type='text']",
+    "header input[type='text']",
+    "input[type='search']",
+)
+LAGOU_SEARCH_BTN_SELECTORS = (
+    "input.search_button",
+    "button.search-btn",
+    ".search_button",
+    ".search-btn",
+    "[class*='search-btn']",
+    "button[type='submit']",
+)
+LAGOU_CITY_TRIGGER_SELECTORS = (
+    ".city_label",
+    "#city_name",
+    ".changeCity_text",
+    "[class*='city-wrapper']",
+    "[class*='change-city']",
+    ".position-header .city",
+)
+
+
+def _prepare_lagou_page(driver, log: Callable[[str], None]) -> None:
+    try:
+        driver.execute_script("window.scrollTo(0, 0);")
+        WebDriverWait(driver, 20).until(
+            lambda d: d.execute_script("return document.readyState") in ("interactive", "complete"),
+        )
+        WebDriverWait(driver, 15).until(
+            lambda d: d.execute_script(
+                "return document.querySelectorAll('input,textarea').length > 0;"
+            ),
+        )
+    except TimeoutException:
+        log("[拉勾网] 页面加载较慢，继续尝试搜索...")
+    time.sleep(random.uniform(1.2, 2.0))
+
+
+def _human_click(driver, element) -> None:
+    try:
+        driver.execute_script(
+            "arguments[0].scrollIntoView({block:'center'});", element,
+        )
+        ActionChains(driver).move_to_element(element).pause(
+            random.uniform(0.15, 0.45),
+        ).click(element).perform()
+    except WebDriverException:
+        driver.execute_script("arguments[0].click();", element)
+
+
+def _human_type(element, text: str) -> None:
+    try:
+        element.clear()
+    except WebDriverException:
+        pass
+    for ch in text:
+        element.send_keys(ch)
+        time.sleep(random.uniform(0.05, 0.14))
+
+
+def _find_visible_element(driver, selectors) -> Optional[object]:
+    for sel in selectors:
+        try:
+            for el in driver.find_elements(By.CSS_SELECTOR, sel):
+                if not el.is_displayed() or not el.is_enabled():
+                    continue
+                size = el.size or {}
+                if size.get("width", 0) <= 0 or size.get("height", 0) <= 0:
+                    continue
+                return el
+        except WebDriverException:
+            continue
+    return None
+
+
+def _select_lagou_city(driver, city_name: str, log: Callable[[str], None]) -> bool:
+    if not city_name or city_name == "全国":
+        return True
+    trigger = _find_visible_element(driver, LAGOU_CITY_TRIGGER_SELECTORS)
+    if trigger is not None:
+        current = (trigger.text or "").strip()
+        if city_name in current:
+            return True
+        _human_click(driver, trigger)
+        time.sleep(random.uniform(0.4, 0.8))
+    city_option_selectors = (
+        f"//dd[contains(text(),'{city_name}')]",
+        f"//li[contains(text(),'{city_name}')]",
+        f"//span[contains(text(),'{city_name}')]",
+        f"//a[contains(text(),'{city_name}')]",
+        f"//*[contains(@class,'city') and contains(text(),'{city_name}')]",
+    )
+    for xpath in city_option_selectors:
+        try:
+            for el in driver.find_elements(By.XPATH, xpath):
+                if not el.is_displayed():
+                    continue
+                _human_click(driver, el)
+                log(f"[拉勾网] 已选择城市 {city_name}")
+                time.sleep(random.uniform(0.5, 1.0))
+                return True
+        except WebDriverException:
+            continue
+    return False
+
+
+def _set_react_input_value(driver, element, value: str) -> None:
+    try:
+        driver.execute_script(
+            """
+            const el = arguments[0];
+            const value = arguments[1];
+            const desc = Object.getOwnPropertyDescriptor(
+                HTMLInputElement.prototype, 'value'
+            );
+            if (desc && desc.set) desc.set.call(el, value);
+            else el.value = value;
+            el.dispatchEvent(new Event('input', {bubbles: true}));
+            el.dispatchEvent(new Event('change', {bubbles: true}));
+            """,
+            element, value,
+        )
+    except WebDriverException:
+        _human_type(element, value)
+
+
+def _submit_lagou_search_via_js(driver, keyword: str) -> dict:
+    script = """
+    const keyword = arguments[0];
+    function setValue(el, value) {
+        const desc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+        if (desc && desc.set) desc.set.call(el, value);
+        else el.value = value;
+        el.dispatchEvent(new Event('input', {bubbles: true}));
+        el.dispatchEvent(new Event('change', {bubbles: true}));
+    }
+    const inputs = Array.from(document.querySelectorAll('input'));
+    const hints = ['搜索', '职位', '关键词', '想找'];
+    for (const el of inputs) {
+        const type = (el.type || '').toLowerCase();
+        if (['hidden', 'checkbox', 'radio', 'file'].includes(type)) continue;
+        const rect = el.getBoundingClientRect();
+        if (rect.width < 40 || rect.height < 10) continue;
+        const ph = (el.placeholder || '').toLowerCase();
+        const id = (el.id || '').toLowerCase();
+        const name = (el.name || '').toLowerCase();
+        const hit = hints.some(h => ph.includes(h))
+            || id.includes('search') || name === 'kd';
+        if (!hit) continue;
+        el.focus();
+        setValue(el, keyword);
+        const btn = document.querySelector(
+            'input.search_button, button.search-btn, .search_button, .search-btn, [class*="search-btn"]'
+        );
+        if (btn) {
+            btn.click();
+            return {ok: true, method: 'button'};
+        }
+        el.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true}));
+        el.dispatchEvent(new KeyboardEvent('keypress', {key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true}));
+        el.dispatchEvent(new KeyboardEvent('keyup', {key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true}));
+        return {ok: true, method: 'enter'};
+    }
+    return {ok: false, count: inputs.length};
+    """
+    try:
+        return driver.execute_script(script, keyword) or {}
+    except WebDriverException:
+        return {}
+
+
+def _submit_lagou_search_via_ui(
+    driver,
+    keyword: str,
+    log: Callable[[str], None],
+) -> bool:
+    search_input = _find_visible_element(driver, LAGOU_SEARCH_INPUT_SELECTORS)
+    if search_input is None:
+        return False
+    log("[拉勾网] 模拟点击搜索框并输入关键词...")
+    _human_click(driver, search_input)
+    time.sleep(random.uniform(0.3, 0.6))
+    _set_react_input_value(driver, search_input, keyword)
+    time.sleep(random.uniform(0.5, 1.0))
+    search_btn = _find_visible_element(driver, LAGOU_SEARCH_BTN_SELECTORS)
+    if search_btn is not None:
+        _human_click(driver, search_btn)
+        log("[拉勾网] 已点击搜索按钮")
+        return True
+    try:
+        search_input.send_keys(Keys.ENTER)
+        log("[拉勾网] 已按回车提交搜索")
+        return True
+    except WebDriverException:
+        return False
+
+
+def ensure_lagou_page(driver, log: Callable[[str], None] = print) -> bool:
+    try:
+        url = driver.current_url or ""
+        title = driver.title or ""
+    except WebDriverException:
+        return False
+    if is_lagou_blocked_url(url, title):
+        return False
+    u = url.lower()
+    if "lagou.com" in u:
+        if u.rstrip("/").endswith("lagou.com") or "/wn" in u or is_lagou_search_url(url):
+            return True
+    log("[拉勾网] 正在打开首页...")
+    soft_navigate(driver, "https://www.lagou.com/", log)
+    return not is_lagou_blocked_url(driver.current_url or "", driver.title or "")
+
+
+def _lagou_ajax_has_results(
+    driver,
+    keyword: str,
+    city_name: str = "",
+) -> bool:
+    try:
+        data = fetch_lagou_page(
+            driver, keyword, 1, city_name,
+            referer=build_wn_search_url(keyword, city_name),
+        )
+    except WebDriverException:
+        return False
+    if not data or not data.get("success"):
+        return False
+    positions = (
+        data.get("content", {})
+        .get("positionResult", {})
+        .get("result", [])
+    )
+    return bool(positions)
+
+
+def has_lagou_results(
+    driver,
+    keyword: str = "",
+    city_name: str = "",
+) -> bool:
+    from .lagou_pager import find_current_page_lagou_items
+
+    if find_current_page_lagou_items(driver):
+        return True
+    if keyword:
+        return _lagou_ajax_has_results(driver, keyword, city_name)
+    return False
+
+
+def wait_for_lagou_results(
+    driver,
+    log: Callable[[str], None],
+    has_results_fn: Callable,
+    detect_captcha_fn: Optional[Callable[[], bool]] = None,
+    on_captcha_fn: Optional[Callable[[], bool]] = None,
+    stop_check: Optional[Callable[[], bool]] = None,
+    timeout: float = 60,
+    keyword: str = "",
+    city_name: str = "",
+) -> bool:
+    deadline = time.monotonic() + timeout
+    last_status = 0.0
+    while time.monotonic() < deadline:
+        if stop_check and stop_check():
+            return False
+        if has_results_fn(driver):
+            return True
+        if keyword and _lagou_ajax_has_results(driver, keyword, city_name):
+            log("[拉勾网] Ajax 接口已返回职位数据")
+            return True
+        try:
+            url = driver.current_url or ""
+            title = driver.title or ""
+        except WebDriverException:
+            url, title = "", ""
+        if is_lagou_blocked_url(url, title):
+            if detect_captcha_fn and detect_captcha_fn():
+                log("[拉勾网] 搜索触发验证，请完成滑块...")
+                if on_captcha_fn and on_captcha_fn():
+                    time.sleep(random.uniform(2.0, 3.0))
+                    continue
+                return False
+        now = time.monotonic()
+        if now - last_status >= 12:
+            log(f"[拉勾网] 等待结果… {url[:85]} | {title[:30]}")
+            last_status = now
+        time.sleep(1.2)
+    return has_results_fn(driver) or (
+        bool(keyword) and _lagou_ajax_has_results(driver, keyword, city_name)
+    )
+
+
+def navigate_to_lagou_search(
+    driver,
+    keyword: str,
+    city_name: str = "",
+    log: Callable[[str], None] = print,
+    has_results_fn=None,
+    detect_captcha_fn: Optional[Callable[[], bool]] = None,
+    on_captcha_fn: Optional[Callable[[], bool]] = None,
+    stop_check: Optional[Callable[[], bool]] = None,
+) -> bool:
+    """模拟人工在首页搜索，避免 driver.get 直接跳转搜索 URL。"""
+    def _has_results(d) -> bool:
+        return has_lagou_results(d, keyword, city_name)
+
+    check_fn = has_results_fn or _has_results
+
+    if is_lagou_search_url(driver.current_url or "", keyword) and check_fn(driver):
+        log("[拉勾网] 已在搜索结果页")
+        return True
+
+    if not ensure_lagou_page(driver, log):
+        log("[拉勾网] 当前处于验证/登录页")
+        if on_captcha_fn and on_captcha_fn():
+            if not ensure_lagou_page(driver, log):
+                return False
+        else:
+            return False
+
+    _prepare_lagou_page(driver, log)
+    _select_lagou_city(driver, city_name, log)
+    time.sleep(random.uniform(0.5, 1.0))
+
+    try:
+        before_url = driver.current_url or ""
+    except WebDriverException:
+        before_url = ""
+
+    submitted = _submit_lagou_search_via_ui(driver, keyword, log)
+    if not submitted:
+        js_result = _submit_lagou_search_via_js(driver, keyword)
+        if js_result.get("ok"):
+            log(f"[拉勾网] 已通过页面脚本提交搜索 ({js_result.get('method', 'js')})")
+            submitted = True
+        else:
+            wn_url = build_wn_search_url(keyword, city_name)
+            log("[拉勾网] 未找到搜索框，尝试打开新版搜索页...")
+            soft_navigate(driver, wn_url, log)
+
+    if submitted:
+        log("[拉勾网] 等待页面加载搜索结果...")
+        for _ in range(20):
+            if stop_check and stop_check():
+                return False
+            try:
+                if (driver.current_url or "") != before_url:
+                    break
+            except WebDriverException:
+                pass
+            if check_fn(driver):
+                log("[拉勾网] 搜索结果已加载")
+                return True
+            time.sleep(0.8)
+
+    wait_kwargs = dict(
+        keyword=keyword, city_name=city_name,
+        detect_captcha_fn=detect_captcha_fn,
+        on_captcha_fn=on_captcha_fn, stop_check=stop_check,
+    )
+    if wait_for_lagou_results(
+        driver, log, check_fn, timeout=45, **wait_kwargs,
+    ):
+        log("[拉勾网] 搜索结果已加载")
+        return True
+
+    for label, url in (
+        ("新版搜索页", build_wn_search_url(keyword, city_name)),
+        ("经典搜索页", build_list_url(keyword, city_name)),
+    ):
+        log(f"[拉勾网] 首页搜索未出结果，尝试打开{label}...")
+        soft_navigate(driver, url, log)
+        if wait_for_lagou_results(
+            driver, log, check_fn, timeout=40, **wait_kwargs,
+        ):
+            log("[拉勾网] 搜索结果已加载")
+            return True
+
     return False
 
 

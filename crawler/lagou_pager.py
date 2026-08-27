@@ -12,8 +12,16 @@ from selenium.common.exceptions import StaleElementReferenceException, WebDriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webelement import WebElement
 
-LAGOU_LIST_ROOT_CSS = "#s_position_list, .item_con"
-LAGOU_LIST_ITEM_CSS = "li.con_list_item, .con_list_item"
+LAGOU_LIST_ROOT_CSS = (
+    "#s_position_list, .item_con, [class*='job-list'], "
+    "[class*='position-list'], [class*='search-job-list']"
+)
+LAGOU_LIST_ITEM_CSS = (
+    "li.con_list_item, .con_list_item, "
+    "[class*='position-item'], [class*='job-card'], "
+    "[class*='JobCard'], [class*='job_item'], "
+    "[class*='position-card']"
+)
 
 _READ_PAGE_JS = """
 const root = document.querySelector('.pager_container');

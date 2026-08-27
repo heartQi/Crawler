@@ -44,10 +44,11 @@ from .models import CompanyInfo, CrawlResult
 from .lagou_api import (
     build_list_url,
     build_lagou_company_lookup,
+    build_wn_search_url,
     enrich_lagou_companies,
     fetch_lagou_page_with_retry,
     format_lagou_error,
-    is_lagou_search_url,
+    navigate_to_lagou_search,
     parse_lagou_positions,
 )
 from .lagou_company import fill_contacts_from_company_pages
@@ -249,8 +250,7 @@ class CrawlerEngine:
                 ):
                     if platform_key == "lagou":
                         log_callback(
-                            f"[{pname}] Chrome 已打开拉勾首页，"
-                            f"连接后请在浏览器手动搜索关键词（避免程序自动跳转触发验证）..."
+                            f"[{pname}] Chrome 已打开，连接后将自动模拟人工搜索..."
                         )
                     else:
                         log_callback(f"[{pname}] 页面已就绪，自动继续查询...")
@@ -625,16 +625,26 @@ class CrawlerEngine:
             driver = self._ensure_driver(
                 "lagou", login_confirmation, log_callback, pname,
             )
-            list_url = build_list_url(keyword, city_name)
-            if not self._wait_for_lagou_user_search(
-                driver, keyword, city_name, cfg, pname, list_url,
-                login_confirmation, log_callback, stop_check,
+            list_url = build_wn_search_url(keyword, city_name)
+
+            def _on_lagou_captcha() -> bool:
+                return self._resolve_captcha_page(
+                    driver, cfg, pname, list_url, login_confirmation,
+                    log_callback, stop_check, reload_target=False,
+                )
+
+            if not navigate_to_lagou_search(
+                driver, keyword, city_name, log_callback,
+                detect_captcha_fn=lambda: self._detect_captcha(
+                    driver, cfg, log_callback,
+                ),
+                on_captcha_fn=_on_lagou_captcha,
+                stop_check=stop_check,
             ):
                 return CrawlResult(
                     [], CRAWL_BLOCKED,
                     f"{pname} 未能获取搜索结果。"
-                    f"请在 Chrome 手动搜索「{keyword}」并完成滑块验证。"
-                    f"当前：{driver.title}",
+                    f"请完成滑块验证后重试。当前：{driver.title}",
                 )
 
             human_pause(1.5, 2.5)
@@ -899,72 +909,6 @@ class CrawlerEngine:
                         return True
         except WebDriverException:
             pass
-        return False
-
-    def _wait_for_lagou_user_search(
-        self,
-        driver,
-        keyword: str,
-        city_name: str,
-        cfg,
-        pname: str,
-        list_url: str,
-        login_confirmation,
-        log_callback: Callable[[str], None],
-        stop_check: Callable[[], bool],
-        timeout: float = 300,
-    ) -> bool:
-        """等待用户在 Chrome 手动搜索，避免 Selenium 自动跳转触发验证。"""
-        if is_lagou_search_url(driver.current_url or "", keyword):
-            if find_current_page_lagou_items(driver):
-                log_callback(f"[{pname}] 已在搜索结果页")
-                return True
-
-        log_callback(f"[{pname}] 请在 Chrome 中手动搜索（程序不会自动打开搜索页）：")
-        log_callback(f"[{pname}]   1. 在拉勾首页搜索框输入「{keyword}」")
-        if city_name and city_name != "全国":
-            log_callback(f"[{pname}]   2. 城市选择「{city_name}」")
-            log_callback(f"[{pname}]   3. 回车搜索；若出现滑块请拖到尽头")
-        else:
-            log_callback(f"[{pname}]   2. 回车搜索；若出现滑块请拖到尽头")
-        log_callback(f"[{pname}] 等待搜索结果（最多 {int(timeout)} 秒）...")
-
-        deadline = time.monotonic() + timeout
-        captcha_round = 0
-        last_status = 0.0
-
-        while time.monotonic() < deadline:
-            if stop_check():
-                return False
-
-            if find_current_page_lagou_items(driver):
-                log_callback(f"[{pname}] 已检测到职位列表，开始采集")
-                return True
-
-            if self._detect_captcha(driver, cfg, log_callback):
-                captcha_round += 1
-                log_callback(
-                    f"[{pname}] 检测到验证页，请在浏览器完成滑块；"
-                    f"失败时请手动刷新页面后重试"
-                )
-                if login_confirmation and login_confirmation(pname, 180):
-                    human_pause(2.0, 3.0)
-                    if find_current_page_lagou_items(driver):
-                        return True
-                    continue
-                return False
-
-            now = time.monotonic()
-            if now - last_status >= 15:
-                try:
-                    cur_url = (driver.current_url or "")[:80]
-                except WebDriverException:
-                    cur_url = "(未知)"
-                log_callback(f"[{pname}] 等待手动搜索… 当前页: {cur_url}")
-                last_status = now
-
-            time.sleep(2)
-
         return False
 
     @staticmethod

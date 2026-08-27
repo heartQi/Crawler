@@ -240,3 +240,20 @@ def safe_get(driver, url: str, log=None) -> None:
         except WebDriverException:
             pass
     time.sleep(random.uniform(1.5, 2.5))
+
+
+def soft_navigate(driver, url: str, log=None) -> None:
+    """用页面内跳转代替 driver.get，降低被识别为自动化的概率。"""
+    if log:
+        log(f"正在跳转: {url[:100]}...")
+    try:
+        driver.execute_script("window.location.assign(arguments[0]);", url)
+    except WebDriverException:
+        safe_get(driver, url, log)
+        return
+    time.sleep(random.uniform(2.0, 3.0))
+    if log:
+        try:
+            log(f"跳转后: {(driver.current_url or '')[:90]} | {driver.title}")
+        except WebDriverException:
+            pass
