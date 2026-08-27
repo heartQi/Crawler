@@ -4,6 +4,8 @@
 各平台的页面解析函数（与爬虫引擎解耦，便于单独更新选择器）
 """
 
+from __future__ import annotations
+
 import json
 import re
 

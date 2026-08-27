@@ -39,6 +39,8 @@ class CrawlerApp:
         self.platform_vars = {}
         self._placeholder_active = True
         self._crawl_stop = False
+        self._crawl_in_progress = False
+        self._login_in_progress = False
         self._stop_event = Event()
         self._login_done_event = Event()
         self._login_cancel_event = Event()
@@ -327,6 +329,12 @@ class CrawlerApp:
 
     def _open_login_settings(self):
         """收集 Boss 临时凭据并立即启动浏览器登录流程。"""
+        if self._crawl_in_progress:
+            messagebox.showinfo("提示", "查询进行中，请结束当前查询后再登录。")
+            return
+        if self._login_in_progress:
+            messagebox.showinfo("提示", "登录正在进行中，请先完成浏览器中的登录验证。")
+            return
         dlg = tk.Toplevel(self.root)
         dlg.title("Boss直聘登录设置")
         dlg.geometry("480x300")
@@ -369,6 +377,7 @@ class CrawlerApp:
                 password=password.get(),
             )
             dlg.destroy()
+            self._login_in_progress = True
             self.status_label.config(text="Boss 登录信息已准备，正在打开浏览器...")
             threading.Thread(target=self._do_boss_login_background, daemon=True).start()
 
@@ -404,6 +413,8 @@ class CrawlerApp:
             self.root.after(0, self._reset_boss_login_status)
             self.root.after(0, lambda: messagebox.showerror(
                 "登录出错", f"Boss直聘登录过程出错：{e}"))
+        finally:
+            self.root.after(0, lambda: setattr(self, "_login_in_progress", False))
 
     def _wait_for_login_confirmation(self, platform_name: str, timeout: int) -> bool:
         """工作线程等待主线程中的人工登录确认。"""
@@ -495,6 +506,11 @@ class CrawlerApp:
     # ──────────── 查询控制 ────────────
 
     def _start_crawl(self):
+        if self._crawl_in_progress:
+            return
+        if self._login_in_progress:
+            messagebox.showinfo("提示", "Boss 登录正在进行中，请完成登录后再开始查询。")
+            return
         selected = [k for k, v in self.platform_vars.items() if v.get()]
         if not selected:
             messagebox.showwarning("提示", "请至少选择一个招聘平台！")
@@ -509,6 +525,7 @@ class CrawlerApp:
         city_name = self.city_var.get()
         city_codes = CITIES.get(city_name, {})
         self._crawl_stop = False
+        self._crawl_in_progress = True
         self._stop_event.clear()
         if "boss" in selected and self._boss_credentials is None and not self._boss_logged_in:
             from .accounts import load_platform_credentials
@@ -604,6 +621,7 @@ class CrawlerApp:
         self.progress_label.config(text=f"{current}/{total} 平台完成")
 
     def _crawl_done(self, stopped=False, statuses=None):
+        self._crawl_in_progress = False
         self.crawl_btn.config(state=tk.NORMAL, text="开始查询")
         self.stop_btn.config(state=tk.DISABLED)
         n = len(self.results)

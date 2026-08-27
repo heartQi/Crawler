@@ -203,6 +203,7 @@ class CrawlerEngine:
         self._platforms = list(PLATFORM_CONFIG.keys())
         self._driver: Optional[webdriver.Chrome] = None
         self._driver_mode: Optional[str] = None  # "auto" | "attach"
+        self._attached_platform: Optional[str] = None
         self.headless = headless
 
     def _reset_driver(self) -> None:
@@ -213,6 +214,7 @@ class CrawlerEngine:
                 pass
         self._driver = None
         self._driver_mode = None
+        self._attached_platform = None
 
     def _ensure_driver(
         self,
@@ -274,6 +276,12 @@ class CrawlerEngine:
                     install_liepin_capture_hook(self._driver)
                 self._driver_mode = "attach"
                 log_callback(f"[{pname}] 已连接浏览器，开始查询...")
+            elif self._attached_platform != platform_key:
+                log_callback(f"[{pname}] 复用已连接的 Chrome，切换平台页面...")
+                if platform_key == "liepin":
+                    ensure_liepin_home_tab(self._driver, log=log_callback)
+                    install_liepin_capture_hook(self._driver)
+            self._attached_platform = platform_key
             return self._driver
 
         if self._driver_mode == "attach":
@@ -410,6 +418,11 @@ class CrawlerEngine:
             )
         except Exception as exc:
             log_callback(f"[{pname}] 查询异常：{exc}")
+            if results:
+                return CrawlResult(
+                    results, CRAWL_OK,
+                    f"部分成功：已获取 {len(results)} 条（查询异常：{exc}）",
+                )
             return CrawlResult([], CRAWL_BLOCKED, f"{pname} 查询异常：{exc}")
         finally:
             if credentials is not None:
@@ -557,6 +570,11 @@ class CrawlerEngine:
             )
         except Exception as exc:
             log_callback(f"[{pname}] 查询异常：{exc}")
+            if results:
+                return CrawlResult(
+                    results, CRAWL_OK,
+                    f"部分成功：已获取 {len(results)} 条（查询异常：{exc}）",
+                )
             return CrawlResult([], CRAWL_BLOCKED, f"{pname} 查询异常：{exc}")
 
     def _liepin_fallback_dom(
@@ -750,6 +768,11 @@ class CrawlerEngine:
             )
         except Exception as exc:
             log_callback(f"[{pname}] 查询异常：{exc}")
+            if results:
+                return CrawlResult(
+                    results, CRAWL_OK,
+                    f"部分成功：已获取 {len(results)} 家（查询异常：{exc}）",
+                )
             return CrawlResult([], CRAWL_BLOCKED, f"{pname} 查询异常：{exc}")
 
     def _parse_lagou_items(self, items, cfg, seen) -> List[CompanyInfo]:
