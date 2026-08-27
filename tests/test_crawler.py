@@ -18,6 +18,7 @@ class FakeElement:
         self._enabled = enabled
         self.value = ""
         self.clicked = False
+        self.size = {"width": 100, "height": 24 if displayed else 0}
 
     def is_displayed(self):
         return self._displayed

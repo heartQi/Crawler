@@ -765,7 +765,15 @@ class CrawlerEngine:
                         if ajax_total:
                             page_limit = min(MAX_PAGES, ajax_total)
                         if not ap_data:
-                            log_callback(f"[{pname}] 接口第 {next_p} 页无数据，停止翻页")
+                            ap_data = self._parse_open_lagou_page(
+                                driver, next_p, cfg, seen,
+                                contact_search_visited, log_callback, stop_check,
+                            )
+                        if not ap_data:
+                            log_callback(
+                                f"[{pname}] 接口第 {next_p} 页无数据，"
+                                "且浏览器未检测到可解析的当前页卡片，停止翻页"
+                            )
                             break
                         results.extend(ap_data)
                         completed_pages = next_p
@@ -857,6 +865,48 @@ class CrawlerEngine:
                 page_data.append(info)
             except Exception:
                 continue
+        return page_data
+
+    def _parse_open_lagou_page(
+        self,
+        driver,
+        expected_page: int,
+        cfg,
+        seen: set,
+        contact_search_visited: set,
+        log_callback: Callable[[str], None],
+        stop_check: Callable[[], bool],
+    ) -> List[CompanyInfo]:
+        """接口受限时，仅解析浏览器中已实际打开的目标页，不主动跳转。"""
+        browser_page = read_lagou_current_page(driver)
+        if not browser_page:
+            try:
+                params = urllib.parse.parse_qs(
+                    urllib.parse.urlparse(driver.current_url or "").query,
+                )
+                browser_page = int((params.get("pn") or ["1"])[0])
+            except (TypeError, ValueError, WebDriverException):
+                browser_page = 1
+        if browser_page != expected_page:
+            log_callback(
+                f"[拉勾网] 接口受限；浏览器当前为第 {browser_page} 页，"
+                f"不是目标第 {expected_page} 页"
+            )
+            return []
+
+        items = find_current_page_lagou_items(driver)
+        if not items:
+            return []
+
+        page_data = self._parse_lagou_items(items, cfg, seen)
+        if not page_data:
+            return []
+
+        log_callback(f"[拉勾网] 接口受限，改为解析浏览器已打开的第 {expected_page} 页")
+        fill_contacts_from_company_pages(
+            driver, page_data, driver.current_url or "",
+            contact_search_visited, log_callback, stop_check,
+        )
         return page_data
 
     def _enrich_lagou_page_data(
