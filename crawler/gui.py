@@ -66,11 +66,14 @@ class CrawlerApp:
 
     def _init_fonts(self):
         self.FONT_BOLD_18 = tkfont.Font(family="Microsoft YaHei", size=18, weight="bold")
+        self.FONT_BOLD_15 = tkfont.Font(family="Microsoft YaHei", size=15, weight="bold")
         self.FONT_BOLD_14 = tkfont.Font(family="Microsoft YaHei", size=14, weight="bold")
         self.FONT_BOLD_13 = tkfont.Font(family="Microsoft YaHei", size=13, weight="bold")
         self.FONT_BOLD_12 = tkfont.Font(family="Microsoft YaHei", size=12, weight="bold")
         self.FONT_BOLD_11 = tkfont.Font(family="Microsoft YaHei", size=11, weight="bold")
         self.FONT_BOLD_10 = tkfont.Font(family="Microsoft YaHei", size=10, weight="bold")
+        self.FONT_16 = tkfont.Font(family="Microsoft YaHei", size=16)
+        self.FONT_15 = tkfont.Font(family="Microsoft YaHei", size=15)
         self.FONT_13 = tkfont.Font(family="Microsoft YaHei", size=13)
         self.FONT_12 = tkfont.Font(family="Microsoft YaHei", size=12)
         self.FONT_11 = tkfont.Font(family="Microsoft YaHei", size=11)
@@ -88,6 +91,35 @@ class CrawlerApp:
         style.map("Treeview",
                   background=[("selected", "#D5E8FF")],
                   foreground=[("selected", PRIMARY)])
+        self._cb_off, self._cb_on = self._make_checkbox_images(24)
+
+    def _make_checkbox_images(self, size: int):
+        """生成放大后的勾选框图片（Windows 原生勾选方块几乎不随字体变大）。"""
+        off = tk.PhotoImage(width=size, height=size)
+        on = tk.PhotoImage(width=size, height=size)
+        border, empty, fill, mark = "#7A8794", "#FFFFFF", "#2E86C1", "#FFFFFF"
+        for y in range(size):
+            row_off = []
+            row_on = []
+            for x in range(size):
+                edge = x < 2 or y < 2 or x >= size - 2 or y >= size - 2
+                row_off.append(border if edge else empty)
+                row_on.append(border if edge else fill)
+            off.put("{" + " ".join(row_off) + "}", to=(0, y))
+            on.put("{" + " ".join(row_on) + "}", to=(0, y))
+        for i in range(int(size * 0.22), int(size * 0.45)):
+            y = i + int(size * 0.27)
+            if 0 <= y < size:
+                on.put(mark, to=(i, y))
+                if y + 1 < size:
+                    on.put(mark, to=(i, y + 1))
+        for i in range(int(size * 0.45), int(size * 0.78)):
+            y = int(size * 1.18) - i
+            if 0 <= y < size:
+                on.put(mark, to=(i, y))
+                if y + 1 < size:
+                    on.put(mark, to=(i, y + 1))
+        return off, on
 
     # ──────────── UI 构建 ────────────
 
@@ -123,27 +155,32 @@ class CrawlerApp:
         # ── 平台选择 ──
         pf = tk.LabelFrame(
             panel, text="选择平台",
-            font=self.FONT_BOLD_12,
-            bg=CARD_BG, fg=TEXT_DARK, padx=10, pady=8,
+            font=self.FONT_BOLD_15,
+            bg=CARD_BG, fg=TEXT_DARK, padx=16, pady=14,
+            labelanchor="nw",
         )
-        pf.pack(fill=tk.X, padx=12, pady=(10, 4))
+        pf.pack(fill=tk.X, padx=12, pady=(10, 6))
 
         for key, info in PLATFORMS.items():
             var = tk.BooleanVar(value=False)
             self.platform_vars[key] = var
             cb = tk.Checkbutton(
                 pf, text=info["name"], variable=var,
-                font=self.FONT_12, bg=CARD_BG,
+                font=self.FONT_15, bg=CARD_BG,
                 activebackground=CARD_BG, selectcolor=CARD_BG,
                 fg=info["color"],
+                image=self._cb_off, selectimage=self._cb_on,
+                compound=tk.LEFT, indicatoron=False,
+                bd=0, highlightthickness=0, relief=tk.FLAT,
+                padx=6, pady=4, cursor="hand2",
             )
-            cb.pack(side=tk.LEFT, padx=(0, 18))
+            cb.pack(side=tk.LEFT, padx=(0, 24))
             if key == "boss" and info.get("requires_login"):
                 self._boss_login_label = self._make_label(
-                    pf, text="需登录", font=self.FONT_BOLD_10,
+                    pf, text="需登录", font=self.FONT_BOLD_12,
                     fg="#E67E22", bg=CARD_BG, cursor="hand2",
                 )
-                self._boss_login_label.pack(side=tk.LEFT, padx=(0, 18))
+                self._boss_login_label.pack(side=tk.LEFT, padx=(0, 24))
                 self._boss_login_label.bind(
                     "<Button-1>", lambda e: self._open_login_settings()
                 )
@@ -151,37 +188,37 @@ class CrawlerApp:
         btn_frame = tk.Frame(pf, bg=CARD_BG)
         btn_frame.pack(side=tk.LEFT)
         tk.Button(
-            btn_frame, text="全选", font=self.FONT_10,
+            btn_frame, text="全选", font=self.FONT_12,
             command=self._select_all, bg="#EBF5FB", relief=tk.FLAT,
-            cursor="hand2",
-        ).pack(side=tk.LEFT, padx=(10, 2))
+            cursor="hand2", padx=10, pady=4,
+        ).pack(side=tk.LEFT, padx=(12, 4))
         tk.Button(
-            btn_frame, text="全不选", font=self.FONT_10,
+            btn_frame, text="全不选", font=self.FONT_12,
             command=self._deselect_all, bg="#EBF5FB", relief=tk.FLAT,
-            cursor="hand2",
-        ).pack(side=tk.LEFT, padx=2)
+            cursor="hand2", padx=10, pady=4,
+        ).pack(side=tk.LEFT, padx=4)
 
         # ── 搜索栏 ──
         sf = tk.Frame(panel, bg=CARD_BG)
-        sf.pack(fill=tk.X, padx=12, pady=(6, 10))
+        sf.pack(fill=tk.X, padx=12, pady=(8, 12))
 
         self._make_label(
-            sf, text="搜索关键词：", font=self.FONT_12,
+            sf, text="搜索关键词：", font=self.FONT_15,
             bg=CARD_BG, fg=TEXT_DARK,
         ).pack(side=tk.LEFT)
 
         self.keyword_entry = tk.Entry(
-            sf, font=self.FONT_13, width=28,
+            sf, font=self.FONT_16, width=30,
             relief=tk.SOLID, bd=1, fg=self.PLACEHOLDER_FG,
         )
         self.keyword_entry.insert(0, self.PLACEHOLDER_TEXT)
-        self.keyword_entry.pack(side=tk.LEFT, padx=(4, 12))
+        self.keyword_entry.pack(side=tk.LEFT, padx=(6, 14), ipady=6)
         self.keyword_entry.bind("<FocusIn>", self._on_focus_in)
         self.keyword_entry.bind("<FocusOut>", self._on_focus_out)
         self.keyword_entry.bind("<Return>", lambda e: self._start_crawl())
 
         self._make_label(
-            sf, text="地区：", font=self.FONT_12,
+            sf, text="地区：", font=self.FONT_15,
             bg=CARD_BG, fg=TEXT_DARK,
         ).pack(side=tk.LEFT)
 
@@ -189,30 +226,30 @@ class CrawlerApp:
         self.city_var = tk.StringVar(value="北京")
         self.city_combo = ttk.Combobox(
             sf, textvariable=self.city_var, values=self.city_names,
-            font=self.FONT_12, width=6, state="readonly",
+            font=self.FONT_15, width=7, state="readonly",
         )
-        self.city_combo.pack(side=tk.LEFT, padx=(4, 12))
+        self.city_combo.pack(side=tk.LEFT, padx=(6, 14), ipady=4)
 
         self.crawl_btn = tk.Button(
-            sf, text="开始查询", font=self.FONT_BOLD_13,
+            sf, text="开始查询", font=self.FONT_BOLD_14,
             bg=PRIMARY, fg="white", activebackground="#3A7BC8",
-            relief=tk.FLAT, padx=20, pady=4, cursor="hand2",
+            relief=tk.FLAT, padx=22, pady=6, cursor="hand2",
             command=self._start_crawl,
         )
-        self.crawl_btn.pack(side=tk.LEFT, padx=(0, 8))
+        self.crawl_btn.pack(side=tk.LEFT, padx=(0, 10))
 
         self.stop_btn = tk.Button(
-            sf, text="停止", font=self.FONT_BOLD_12,
+            sf, text="停止", font=self.FONT_BOLD_13,
             bg=DANGER, fg="white", activebackground="#C0392B",
-            relief=tk.FLAT, padx=14, pady=4, cursor="hand2",
+            relief=tk.FLAT, padx=16, pady=6, cursor="hand2",
             state=tk.DISABLED, command=self._stop_crawl,
         )
-        self.stop_btn.pack(side=tk.LEFT, padx=(0, 8))
+        self.stop_btn.pack(side=tk.LEFT, padx=(0, 10))
 
         self.export_btn = tk.Button(
-            sf, text="导出结果", font=self.FONT_12,
+            sf, text="导出结果", font=self.FONT_13,
             bg=ACCENT, fg="white", activebackground="#219A52",
-            relief=tk.FLAT, padx=14, pady=4, cursor="hand2",
+            relief=tk.FLAT, padx=16, pady=6, cursor="hand2",
             command=self._export,
         )
         self.export_btn.pack(side=tk.LEFT)
