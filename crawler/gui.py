@@ -515,7 +515,7 @@ class CrawlerApp:
                     stop_event=self._stop_event,
                     page_callback=self._on_page_collected,
                     credentials=self._boss_credentials if pk == "boss" else None,
-                    login_confirmation=self._wait_for_login_confirmation if pk in ("boss", "lagou", "liepin") else None,
+                    login_confirmation=self._wait_for_login_confirmation if pk in ("boss", "lagou") else None,
                 )
                 if result.status == CRAWL_OK:
                     statuses.append(("ok", f"{pname}: {result.message}"))

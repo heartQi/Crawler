@@ -115,6 +115,16 @@ def manual_browser_ready(
         title = tab.get("title", "")
         if domain not in url:
             continue
+        if platform_key == "liepin":
+            u = url.lower()
+            if "wow.liepin" in u:
+                continue
+            if "passport.liepin" in u or "account.liepin" in u:
+                continue
+            if "liepin.com" in u and ("login" in u or "signin" in u):
+                continue
+            if title == "登录" or ("登录" in title and "猎聘" in title):
+                continue
         if any(kw in title for kw in captcha_title_keywords):
             return False
         if title and title not in ("", "about:blank"):

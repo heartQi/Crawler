@@ -49,6 +49,18 @@ from .lagou_api import (
     parse_lagou_positions,
 )
 from .lagou_company import fill_contacts_from_company_pages
+from .liepin_api import (
+    build_liepin_list_url,
+    collect_liepin_page_data,
+    ensure_liepin_home_tab,
+    extract_jobs_from_dom,
+    fetch_liepin_page_with_retry,
+    format_liepin_error,
+    install_liepin_capture_hook,
+    is_liepin_success,
+    navigate_to_liepin_search,
+    parse_liepin_positions,
+)
 from .lagou_pager import (
     find_current_page_lagou_items,
     go_next_lagou_page,
@@ -214,6 +226,9 @@ class CrawlerEngine:
                 start_url = MANUAL_START_URLS.get(platform_key, "about:blank")
                 log_callback(
                     f"[{pname}] 正在打开普通 Chrome（无自动化控制条），"
+                    f"请在该窗口完成验证（猎聘无需登录）..."
+                    if platform_key == "liepin"
+                    else f"[{pname}] 正在打开普通 Chrome（无自动化控制条），"
                     f"请在该窗口手动完成验证..."
                 )
                 if not is_debug_port_open():
@@ -228,6 +243,14 @@ class CrawlerEngine:
                     platform_key, captcha_titles, timeout=18.0,
                 ):
                     log_callback(f"[{pname}] 页面已就绪，自动继续查询...")
+                elif platform_key == "liepin":
+                    log_callback(
+                        f"[{pname}] 请在 Chrome 打开 www.liepin.com，"
+                        f"查询开始后请在浏览器手动搜索关键词（无需登录）..."
+                    )
+                    wait_manual_browser_ready(
+                        platform_key, captcha_titles, timeout=30.0,
+                    )
                 else:
                     log_callback(
                         f"[{pname}] 未检测到正常页面（可能仍在验证中），"
@@ -239,10 +262,14 @@ class CrawlerEngine:
                         raise RuntimeError(f"{pname} 未完成手动验证")
 
                 log_callback(f"[{pname}] 正在连接浏览器...")
+                attach_domain = "lagou.com" if platform_key == "lagou" else ""
                 self._driver = attach_to_chrome(
-                    platform_domain="lagou.com" if platform_key == "lagou" else "liepin.com",
+                    platform_domain=attach_domain,
                     log=log_callback,
                 )
+                if platform_key == "liepin":
+                    ensure_liepin_home_tab(self._driver, log=log_callback)
+                    install_liepin_capture_hook(self._driver)
                 self._driver_mode = "attach"
                 log_callback(f"[{pname}] 已连接浏览器，开始查询...")
             return self._driver
@@ -274,6 +301,12 @@ class CrawlerEngine:
         if platform_key == "lagou":
             return self._crawl_lagou(
                 keyword, city_name, count, stop_check, log_callback,
+                stop_event, page_callback, login_confirmation,
+            )
+
+        if platform_key == "liepin":
+            return self._crawl_liepin(
+                keyword, city_name, city_code, count, stop_check, log_callback,
                 stop_event, page_callback, login_confirmation,
             )
 
@@ -376,6 +409,162 @@ class CrawlerEngine:
         finally:
             if credentials is not None:
                 credentials.clear()
+
+    def _crawl_liepin(
+        self,
+        keyword: str,
+        city_name: str,
+        city_code: str,
+        count: int,
+        stop_check: Callable[[], bool],
+        log_callback: Callable[[str], None],
+        stop_event: Optional[Event],
+        page_callback,
+        login_confirmation,
+    ) -> CrawlResult:
+        """猎聘：浏览器会话 + pc-search-job 接口翻页。"""
+        event = stop_event or Event()
+        cfg = PLATFORM_CONFIG["liepin"]
+        pname = PLATFORMS["liepin"]["name"]
+        results: List[CompanyInfo] = []
+        seen: set = set()
+
+        try:
+            driver = self._ensure_driver(
+                "liepin", login_confirmation, log_callback, pname,
+            )
+            install_liepin_capture_hook(driver)
+            if not navigate_to_liepin_search(
+                driver, keyword, city_name, city_code, page=1, log=log_callback,
+            ):
+                return CrawlResult(
+                    [],
+                    CRAWL_BLOCKED,
+                    f"{pname} 未能获取职位数据。"
+                    f"请在 Chrome 手动搜索关键词（无需登录）；"
+                    f"若出现登录页请点后退，不要登录。"
+                    f"当前：{driver.title}",
+                )
+
+            human_pause(2.0, 3.0)
+            list_url = build_liepin_list_url(keyword, city_name, city_code=city_code)
+
+            page_limit = MAX_PAGES
+            completed_pages = 0
+
+            for page in range(1, page_limit + 1):
+                if event.is_set() or stop_check():
+                    return CrawlResult(results, CRAWL_OK, f"用户中止，已获取 {len(results)} 条")
+
+                if page > 1:
+                    delay = random.uniform(4, 7)
+                    log_callback(f"[{pname}] 翻页间隔 {delay:.0f} 秒...")
+                    time.sleep(delay)
+                    data = fetch_liepin_page_with_retry(
+                        driver, keyword, page, city_name, city_code,
+                        list_url, log_callback, max_retries=2,
+                    )
+                else:
+                    data = collect_liepin_page_data(
+                        driver, keyword, page, city_name, city_code, log_callback,
+                    )
+                    if not is_liepin_success(data):
+                        data = fetch_liepin_page_with_retry(
+                            driver, keyword, page, city_name, city_code,
+                            list_url, log_callback, max_retries=2,
+                        )
+
+                page_data: List[CompanyInfo] = []
+                if not is_liepin_success(data):
+                    if page == 1:
+                        log_callback(f"[{pname}] 接口未返回数据，尝试解析页面 DOM...")
+                        page_data = self._liepin_fallback_dom(
+                            driver, cfg, seen, log_callback,
+                        )
+                        if not page_data:
+                            return CrawlResult(
+                                [], CRAWL_BLOCKED,
+                                f"{pname} 获取失败：{format_liepin_error(data)}。"
+                                f"页面标题：{driver.title}",
+                            )
+                    else:
+                        log_callback(f"[{pname}] 第 {page} 页接口无数据，停止翻页")
+                        break
+                else:
+                    inner = data.get("data") or {}
+                    pagination = inner.get("pagination") or {}
+                    cards = (inner.get("data") or {}).get("jobCardList") or []
+                    for item in parse_liepin_positions(cards):
+                        key = self._dedupe_key(item, cfg)
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        page_data.append(item)
+                    total_page = int(pagination.get("totalPage") or 1)
+                    page_limit = min(page_limit, total_page)
+
+                if not page_data:
+                    log_callback(f"[{pname}] 第 {page} 页无新增数据")
+                    break
+
+                results.extend(page_data)
+                completed_pages = page
+                log_callback(
+                    f"[{pname}] 第 {page} 页新增 {len(page_data)} 条，累计 {len(results)} 条"
+                )
+                if page_callback:
+                    page_callback(pname, page, page_data, len(results))
+                if count > 0 and len(results) >= count:
+                    results = results[:count]
+                    break
+                if page >= page_limit:
+                    break
+
+            if results:
+                return CrawlResult(
+                    results, CRAWL_OK,
+                    f"成功获取 {len(results)} 条（共 {completed_pages} 页）",
+                )
+            return CrawlResult(
+                [],
+                CRAWL_BLOCKED,
+                f"{pname} 未获取到数据。页面标题：{driver.title}",
+            )
+        except RuntimeError as exc:
+            return CrawlResult([], CRAWL_BLOCKED, str(exc))
+        except TimeoutException as exc:
+            log_callback(f"[{pname}] 浏览器响应超时：{exc}")
+            if results:
+                return CrawlResult(
+                    results, CRAWL_OK,
+                    f"部分成功：已获取 {len(results)} 条（浏览器超时）",
+                )
+            return CrawlResult(
+                [], CRAWL_BLOCKED,
+                f"{pname} 浏览器响应超时。请关闭多余 Chrome 窗口后重试。",
+            )
+        except Exception as exc:
+            log_callback(f"[{pname}] 查询异常：{exc}")
+            return CrawlResult([], CRAWL_BLOCKED, f"{pname} 查询异常：{exc}")
+
+    def _liepin_fallback_dom(
+        self,
+        driver,
+        cfg,
+        seen: set,
+        log_callback: Callable[[str], None],
+    ) -> List[CompanyInfo]:
+        """接口失败时回退到页面 DOM 解析。"""
+        page_data = []
+        for item in extract_jobs_from_dom(driver, log_callback):
+            key = self._dedupe_key(item, cfg)
+            if key in seen:
+                continue
+            seen.add(key)
+            page_data.append(item)
+        if page_data:
+            log_callback(f"[猎聘] DOM 回退解析到 {len(page_data)} 条")
+        return page_data
 
     def _crawl_lagou(
         self,

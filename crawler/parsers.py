@@ -317,18 +317,51 @@ def parse_lagou_item(item) -> CompanyInfo | None:
 
 def parse_liepin_item(item) -> CompanyInfo | None:
     """解析猎聘单条职位卡片"""
-    name_els = item.find_elements(By.CSS_SELECTOR, ".company-name, [class*=companyName], .job-card .company, .sojob-item .company-name")
-    job_els  = item.find_elements(By.CSS_SELECTOR, ".job-title-box .ellipsis-1, [class*=jobTitle], .sojob-item .job-name, .job-card .job-name")
-    sal_els  = item.find_elements(By.CSS_SELECTOR, ".job-finance-info .tag, [class*=salary], .sojob-item .salary, .job-card .salary")
-    info_els = item.find_elements(By.CSS_SELECTOR, ".company-info span, [class*=companyInfo], .sojob-item .industry")
+    comp = _first_text(
+        item,
+        "[class*='company-name'] a",
+        "[class*='company-name']",
+        ".company-name a",
+        ".company-name",
+        ".comp-name a",
+        ".comp-name",
+        ".job-card .company",
+        ".sojob-item .company-name",
+    )
+    job = _first_text(
+        item,
+        "[class*='job-title'] a",
+        "[class*='job-title']",
+        ".job-title-box .ellipsis-1",
+        ".job-name a",
+        ".job-name",
+        ".sojob-item .job-name",
+    )
+    salary = _first_text(
+        item,
+        "[class*='job-salary']",
+        "[class*='salary']",
+        ".job-finance-info .tag",
+        ".sojob-item .salary",
+        ".job-card .salary",
+    )
+    location = _first_text(
+        item,
+        "[class*='job-dq']",
+        "[class*='job-area']",
+        ".job-area",
+        ".job-detail .dq",
+    )
 
-    comp = name_els[0].text.strip() if name_els else ""
     if not comp:
         return None
 
-    industry = ""
-    scale = ""
-    for el in info_els:
+    industry = scale = ""
+    for el in item.find_elements(
+        By.CSS_SELECTOR,
+        ".company-info span, [class*='company-info'] span, "
+        "[class*='company-tags'] span, .sojob-item .industry",
+    ):
         t = el.text.strip()
         if not t:
             continue
@@ -337,16 +370,15 @@ def parse_liepin_item(item) -> CompanyInfo | None:
         elif not scale:
             scale = t
 
-    contact_person, contact_info = _extract_contact_from_item(item)
-
     return CompanyInfo(
         platform="猎聘", name=comp,
         industry=industry or "—", scale=scale or "—",
-        stage="—", description="", location="—",
-        hot_jobs=job_els[0].text.strip() if job_els else "—",
-        salary=sal_els[0].text.strip() if sal_els else "—",
-        contact_person=contact_person,
-        contact_info=contact_info,
+        stage="—", description="",
+        location=location or "—",
+        hot_jobs=job or "—",
+        salary=salary or "—",
+        contact_person="",
+        contact_info="",
     )
 
 
@@ -409,12 +441,13 @@ PLATFORM_CONFIG = {
     },
     "liepin": {
         "url_tpl": "https://www.liepin.com/zhaopin/?key={kw}&curPage={page}",
-        "item_css": ".job-card-pc-container, [class*=job-card], [class*=JobCard], "
-                    ".job-list-item, .job-card, .sojob-list li, .job-list li",
+        "item_css": ".job-list-box > div, .job-list-box [class*='job-card'], "
+                    "[class*='job-card-pc'], .job-card-pc-container, "
+                    ".job-list-item, .sojob-list li",
         "next_css": ".ant-pagination-next:not(.ant-pagination-disabled) button, "
                     "li.next:not(.disabled), button[aria-label='下一页']:not([disabled]), "
                     ".pagination__next:not(.disabled)",
-        "empty_css": ".ant-empty, .no-data",
+        "empty_css": ".ant-empty, .no-data, .search-empty",
         "parse_fn": parse_liepin_item,
         "captcha_title_keywords": ["安全中心"],
         "captcha_body_keywords": ["安全验证", "访问受限"],
