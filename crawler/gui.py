@@ -362,7 +362,10 @@ class CrawlerApp:
 
     def _captcha_cleared_automatically(self, platform_name: str) -> bool:
         """只对可明确检测验证状态的平台启用自动继续。"""
-        platform_key = {"拉勾网": "lagou", "猎聘": "liepin"}.get(platform_name)
+        platform_key = {
+            "拉勾网": "lagou",
+            "猎聘": "liepin",
+        }.get(platform_name.split("·")[0])
         driver = self.engine._driver
         if not platform_key or driver is None:
             return False
@@ -405,9 +408,9 @@ class CrawlerApp:
         ).pack(pady=(22, 10))
         tip = (
             "程序已打开普通 Chrome（无「自动化控制」提示）。\n"
-            "拉勾网：请先在首页手动搜索关键词，再完成滑块验证。\n"
-            "滑块验证通过后程序会自动继续；若未自动继续，可点击「已完成」。\n"
-            "若验证失败，请在浏览器中手动刷新页面后再重试。"
+            "拉勾网：程序将自动模拟点击搜索框并输入关键词。\n"
+            "若出现滑块请拖到尽头；失败时先点浏览器刷新再点「已完成」。\n"
+            "验证通过后会自动继续。"
             if platform_name == "拉勾网"
             else
             "程序已打开普通 Chrome（无「自动化控制」提示）。\n"

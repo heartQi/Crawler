@@ -18,6 +18,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 from .browser import safe_get, soft_navigate
 from .models import CompanyInfo
+from .stealth import human_pause
 
 PHONE_RE = re.compile(
     r"1[3-9]\d{9}|0\d{2,3}[-\s]?\d{7,8}|(?:\d{3,4}[-\s]){1,2}\d{3,8}",
@@ -109,7 +110,6 @@ def is_lagou_search_url(url: str, keyword: str = "") -> bool:
     if (
         "/wn/search" in u or "/jobs/list" in u
         or "/wn/zhaopin" in u or "kd=" in u or "key=" in u
-        or ("/wn/" in u and keyword)
     ):
         if not keyword:
             return True
@@ -347,40 +347,68 @@ def ensure_lagou_page(driver, log: Callable[[str], None] = print) -> bool:
     return not is_lagou_blocked_url(driver.current_url or "", driver.title or "")
 
 
-def _lagou_ajax_has_results(
+def resolve_lagou_referer(
     driver,
     keyword: str,
     city_name: str = "",
-) -> bool:
+) -> str:
     try:
-        data = fetch_lagou_page(
-            driver, keyword, 1, city_name,
-            referer=build_wn_search_url(keyword, city_name),
-        )
+        current = (driver.current_url or "").strip()
+        title = driver.title or ""
+    except WebDriverException:
+        current, title = "", ""
+    if current and "lagou.com" in current and not is_lagou_blocked_url(current, title):
+        return current
+    return build_wn_search_url(keyword, city_name)
+
+
+def is_lagou_home_url(url: str = "") -> bool:
+    u = (url or "").lower().rstrip("/")
+    if not u or "lagou.com" not in u:
+        return False
+    return (
+        u.endswith("lagou.com")
+        or u.endswith("lagou.com/wn")
+        or u.endswith("www.lagou.com/wn")
+    )
+
+
+def _lagou_dom_has_job_cards(driver) -> bool:
+    script = """
+    const sels = [
+        'li.con_list_item', '[class*="job-card"]', '[class*="JobCard"]',
+        '[class*="position-item"]', '[class*="search-job"]',
+        '[data-positionid]', '.item_con li'
+    ];
+    for (const s of sels) {
+        for (const el of document.querySelectorAll(s)) {
+            const r = el.getBoundingClientRect();
+            if (r.height > 24 && r.width > 80) return true;
+        }
+    }
+    return false;
+    """
+    try:
+        return bool(driver.execute_script(script))
     except WebDriverException:
         return False
-    if not data or not data.get("success"):
-        return False
-    positions = (
-        data.get("content", {})
-        .get("positionResult", {})
-        .get("result", [])
-    )
-    return bool(positions)
 
 
-def has_lagou_results(
-    driver,
-    keyword: str = "",
-    city_name: str = "",
-) -> bool:
+def has_lagou_results(driver, keyword: str = "", city_name: str = "") -> bool:
+    """仅检查页面 DOM，等待阶段不调用 Ajax。"""
     from .lagou_pager import find_current_page_lagou_items
 
     if find_current_page_lagou_items(driver):
         return True
-    if keyword:
-        return _lagou_ajax_has_results(driver, keyword, city_name)
-    return False
+    if _lagou_dom_has_job_cards(driver):
+        return True
+    try:
+        url = driver.current_url or ""
+    except WebDriverException:
+        return False
+    if is_lagou_home_url(url):
+        return False
+    return is_lagou_search_url(url, keyword) or is_lagou_search_url(url, "")
 
 
 def wait_for_lagou_results(
@@ -401,29 +429,28 @@ def wait_for_lagou_results(
             return False
         if has_results_fn(driver):
             return True
-        if keyword and _lagou_ajax_has_results(driver, keyword, city_name):
-            log("[拉勾网] Ajax 接口已返回职位数据")
-            return True
         try:
             url = driver.current_url or ""
             title = driver.title or ""
         except WebDriverException:
             url, title = "", ""
-        if is_lagou_blocked_url(url, title):
-            if detect_captcha_fn and detect_captcha_fn():
-                log("[拉勾网] 搜索触发验证，请完成滑块...")
-                if on_captcha_fn and on_captcha_fn():
-                    time.sleep(random.uniform(2.0, 3.0))
-                    continue
-                return False
+        if is_lagou_blocked_url(url, title) or (
+            detect_captcha_fn and detect_captcha_fn()
+        ):
+            log("[拉勾网] 仍在验证页，请完成滑块后重试...")
+            if on_captcha_fn and on_captcha_fn():
+                time.sleep(random.uniform(2.0, 3.0))
+                continue
+            return False
         now = time.monotonic()
         if now - last_status >= 12:
-            log(f"[拉勾网] 等待结果… {url[:85]} | {title[:30]}")
+            if is_lagou_home_url(url):
+                log("[拉勾网] 仍在首页，请在 Chrome 搜索框输入关键词并回车…")
+            else:
+                log(f"[拉勾网] 等待搜索结果… {url[:85]} | {title[:30]}")
             last_status = now
-        time.sleep(1.2)
-    return has_results_fn(driver) or (
-        bool(keyword) and _lagou_ajax_has_results(driver, keyword, city_name)
-    )
+        time.sleep(1.5)
+    return bool(has_results_fn(driver))
 
 
 def navigate_to_lagou_search(
@@ -434,15 +461,13 @@ def navigate_to_lagou_search(
     has_results_fn=None,
     detect_captcha_fn: Optional[Callable[[], bool]] = None,
     on_captcha_fn: Optional[Callable[[], bool]] = None,
+    login_confirmation: Optional[Callable[[str, int], bool]] = None,
     stop_check: Optional[Callable[[], bool]] = None,
 ) -> bool:
     """模拟人工在首页搜索，避免 driver.get 直接跳转搜索 URL。"""
-    def _has_results(d) -> bool:
-        return has_lagou_results(d, keyword, city_name)
+    check_fn = has_results_fn or (lambda d: has_lagou_results(d, keyword, city_name))
 
-    check_fn = has_results_fn or _has_results
-
-    if is_lagou_search_url(driver.current_url or "", keyword) and check_fn(driver):
+    if check_fn(driver):
         log("[拉勾网] 已在搜索结果页")
         return True
 
@@ -456,12 +481,7 @@ def navigate_to_lagou_search(
 
     _prepare_lagou_page(driver, log)
     _select_lagou_city(driver, city_name, log)
-    time.sleep(random.uniform(0.5, 1.0))
-
-    try:
-        before_url = driver.current_url or ""
-    except WebDriverException:
-        before_url = ""
+    time.sleep(random.uniform(0.8, 1.5))
 
     submitted = _submit_lagou_search_via_ui(driver, keyword, log)
     if not submitted:
@@ -470,47 +490,40 @@ def navigate_to_lagou_search(
             log(f"[拉勾网] 已通过页面脚本提交搜索 ({js_result.get('method', 'js')})")
             submitted = True
         else:
-            wn_url = build_wn_search_url(keyword, city_name)
-            log("[拉勾网] 未找到搜索框，尝试打开新版搜索页...")
-            soft_navigate(driver, wn_url, log)
+            log("[拉勾网] 未找到搜索框，将尝试其他方式...")
 
     if submitted:
-        log("[拉勾网] 等待页面加载搜索结果...")
-        for _ in range(20):
+        log("[拉勾网] 等待搜索结果加载...")
+        human_pause(1.5, 2.5)
+        for _ in range(25):
             if stop_check and stop_check():
                 return False
-            try:
-                if (driver.current_url or "") != before_url:
-                    break
-            except WebDriverException:
-                pass
             if check_fn(driver):
                 log("[拉勾网] 搜索结果已加载")
                 return True
+            if detect_captcha_fn and detect_captcha_fn():
+                log("[拉勾网] 搜索触发验证，请完成滑块...")
+                if on_captcha_fn and on_captcha_fn():
+                    human_pause(2.0, 3.0)
+                    continue
+                return False
             time.sleep(0.8)
 
     wait_kwargs = dict(
-        keyword=keyword, city_name=city_name,
         detect_captcha_fn=detect_captcha_fn,
-        on_captcha_fn=on_captcha_fn, stop_check=stop_check,
+        on_captcha_fn=on_captcha_fn,
+        stop_check=stop_check,
     )
-    if wait_for_lagou_results(
-        driver, log, check_fn, timeout=45, **wait_kwargs,
-    ):
+    if wait_for_lagou_results(driver, log, check_fn, timeout=45, **wait_kwargs):
         log("[拉勾网] 搜索结果已加载")
         return True
 
-    for label, url in (
-        ("新版搜索页", build_wn_search_url(keyword, city_name)),
-        ("经典搜索页", build_list_url(keyword, city_name)),
-    ):
-        log(f"[拉勾网] 首页搜索未出结果，尝试打开{label}...")
-        soft_navigate(driver, url, log)
-        if wait_for_lagou_results(
-            driver, log, check_fn, timeout=40, **wait_kwargs,
-        ):
-            log("[拉勾网] 搜索结果已加载")
-            return True
+    wn_url = build_wn_search_url(keyword, city_name)
+    log("[拉勾网] 首页搜索未出结果，尝试打开搜索页...")
+    soft_navigate(driver, wn_url, log)
+    if wait_for_lagou_results(driver, log, check_fn, timeout=40, **wait_kwargs):
+        log("[拉勾网] 搜索结果已加载")
+        return True
 
     return False
 
@@ -598,7 +611,7 @@ def fetch_lagou_page_with_retry(
     log: Callable[[str], None] = print,
     max_retries: int = 3,
 ) -> dict:
-    """限流时刷新搜索页并重试。"""
+    """限流时等待后重试，不刷新页面。"""
     last: dict = {}
     for attempt in range(max_retries):
         last = fetch_lagou_page(driver, keyword, page, city, referer=list_url)
@@ -608,11 +621,9 @@ def fetch_lagou_page_with_retry(
             return last
         if attempt >= max_retries - 1:
             break
-        wait = 10 + attempt * 8 + random.uniform(2, 5)
-        log(f"[拉勾网] 第 {page} 页被限流，{wait:.0f} 秒后刷新并重试 ({attempt + 2}/{max_retries})...")
+        wait = 12 + attempt * 10 + random.uniform(3, 6)
+        log(f"[拉勾网] 第 {page} 页被限流，{wait:.0f} 秒后重试 ({attempt + 2}/{max_retries})...")
         time.sleep(wait)
-        safe_get(driver, list_url, log)
-        time.sleep(random.uniform(2.5, 4.0))
     return last
 
 

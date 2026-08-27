@@ -44,12 +44,15 @@ from .models import CompanyInfo, CrawlResult
 from .lagou_api import (
     build_list_url,
     build_lagou_company_lookup,
+    build_wn_search_url,
     enrich_lagou_companies,
     extract_lagou_ajax_result,
     fetch_lagou_page_with_retry,
     format_lagou_error,
     is_lagou_search_url,
+    navigate_to_lagou_search,
     parse_lagou_positions,
+    resolve_lagou_referer,
 )
 from .lagou_company import fill_contacts_from_company_pages
 from .liepin_api import (
@@ -246,16 +249,27 @@ class CrawlerEngine:
                 cfg = PLATFORM_CONFIG.get(platform_key, {})
                 captcha_titles = cfg.get("captcha_title_keywords", [])
                 log_callback(f"[{pname}] 等待页面加载...")
-                if wait_manual_browser_ready(
-                    platform_key, captcha_titles, timeout=18.0,
-                ):
-                    if platform_key == "lagou":
+                if platform_key == "lagou":
+                    if wait_manual_browser_ready(
+                        platform_key, captcha_titles, timeout=18.0,
+                    ):
                         log_callback(
                             f"[{pname}] Chrome 已打开拉勾首页，"
-                            "请在浏览器手动搜索关键词（避免程序自动跳转触发验证）..."
+                            f"程序将自动模拟点击搜索..."
                         )
                     else:
-                        log_callback(f"[{pname}] 页面已就绪，自动继续查询...")
+                        log_callback(
+                            f"[{pname}] 请在 Chrome 完成首页滑块验证（如有），"
+                            f"完成后在弹窗点击「已完成」..."
+                        )
+                        if not login_confirmation:
+                            raise RuntimeError(f"{pname} 需要手动验证，但程序未提供确认回调")
+                        if not login_confirmation(pname, 300):
+                            raise RuntimeError(f"{pname} 未完成手动验证")
+                elif wait_manual_browser_ready(
+                    platform_key, captcha_titles, timeout=18.0,
+                ):
+                    log_callback(f"[{pname}] 页面已就绪，自动继续查询...")
                 elif platform_key == "liepin":
                     log_callback(
                         f"[{pname}] 请在 Chrome 打开 www.liepin.com，"
@@ -627,19 +641,32 @@ class CrawlerEngine:
             driver = self._ensure_driver(
                 "lagou", login_confirmation, log_callback, pname,
             )
-            list_url = build_list_url(keyword, city_name)
-            if not self._wait_for_lagou_user_search(
-                driver, keyword, city_name, cfg, pname, list_url,
-                login_confirmation, log_callback, stop_check,
+            list_url = build_wn_search_url(keyword, city_name)
+
+            def _on_lagou_captcha() -> bool:
+                return self._resolve_captcha_page(
+                    driver, cfg, pname, list_url, login_confirmation,
+                    log_callback, stop_check, reload_target=False,
+                )
+
+            if not navigate_to_lagou_search(
+                driver, keyword, city_name, log_callback,
+                detect_captcha_fn=lambda: self._detect_captcha(
+                    driver, cfg, log_callback,
+                ),
+                on_captcha_fn=_on_lagou_captcha,
+                login_confirmation=login_confirmation,
+                stop_check=stop_check,
             ):
                 return CrawlResult(
                     [], CRAWL_BLOCKED,
                     f"{pname} 未能获取搜索结果。"
-                    f"请在 Chrome 手动搜索「{keyword}」并完成滑块验证。"
-                    f"当前：{driver.title}",
+                    f"请完成滑块验证后重试。当前：{driver.title}",
                 )
 
-            human_pause(1.5, 2.5)
+            list_url = resolve_lagou_referer(driver, keyword, city_name)
+
+            human_pause(2.0, 4.0)
 
             total_pages = read_lagou_total_pages(driver)
             page_limit = min(MAX_PAGES, total_pages or 30)
