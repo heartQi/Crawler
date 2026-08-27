@@ -44,11 +44,11 @@ CRAWL_BACKOFF_FACTOR = 2.0
 CRAWL_BACKOFF_MAX = 180.0
 
 # 拉勾 Ajax 专用（接口更敏感，间隔长于通用节奏）
-LAGOU_AJAX_INTERVAL = (45.0, 75.0)       # 两次接口请求之间的随机等待（秒）
-LAGOU_AJAX_PAGE_EXTRA = (8.0, 15.0)        # 每往后翻一页额外增加的随机等待
-LAGOU_AJAX_LONG_PAUSE_EVERY = 2            # 每 N 次 Ajax 长休息一次
-LAGOU_AJAX_LONG_PAUSE = (90.0, 150.0)     # 长休息时长（秒）
-LAGOU_AJAX_HIGH_PAGE_EXTRA = (50.0, 80.0)  # 第 4 页起浏览器停留额外等待
+LAGOU_AJAX_INTERVAL = (32.0, 58.0)       # 两次接口请求之间的随机等待（秒）
+LAGOU_AJAX_PAGE_EXTRA = (5.0, 12.0)        # 每往后翻一页额外增加的随机等待
+LAGOU_AJAX_LONG_PAUSE_EVERY = 3            # 每 N 次 Ajax 长休息一次
+LAGOU_AJAX_LONG_PAUSE = (60.0, 100.0)     # 长休息时长（秒）
+LAGOU_AJAX_HIGH_PAGE_EXTRA = (25.0, 45.0)  # 第 4 页起额外等待（不跳转 URL）
 LAGOU_BACKOFF_BASE = 60.0                  # 限流退避基数（秒）
 LAGOU_BACKOFF_FACTOR = 2.0
 LAGOU_BACKOFF_JITTER = (20.0, 45.0)

@@ -104,6 +104,36 @@ def lagou_backoff_wait(attempt: int) -> float:
     return wait + random.uniform(*LAGOU_BACKOFF_JITTER)
 
 
+def lagou_referer_for_page(keyword: str, city_name: str, page: int) -> str:
+    """Ajax Referer：指向目标页，不要求浏览器实际打开 pn=N（避免深页 URL 触发滑块）。"""
+    return build_wn_search_url(keyword, city_name, page)
+
+
+def lagou_ensure_search_session(
+    driver,
+    keyword: str,
+    city_name: str,
+    log: Callable[[str], None] = print,
+) -> bool:
+    """若浏览器在验证页，则回到第 1 页搜索 URL。"""
+    try:
+        url = driver.current_url or ""
+        title = driver.title or ""
+    except WebDriverException:
+        return False
+    if not (is_lagou_blocked_url(url, title) or is_lagou_waf_page(driver)):
+        return True
+    safe = build_wn_search_url(keyword, city_name, 1)
+    log("[拉勾网] 检测到验证页，回到第 1 页搜索 URL（请完成滑块）...")
+    _sync_lagou_city_cookie(driver, city_name)
+    soft_navigate(driver, safe, log)
+    human_pause(4.0, 7.0)
+    try:
+        return not is_lagou_waf_page(driver)
+    except WebDriverException:
+        return False
+
+
 def lagou_browse_page_before_ajax(
     driver,
     keyword: str,
@@ -112,20 +142,36 @@ def lagou_browse_page_before_ajax(
     log: Callable[[str], None] = print,
     stop_check=None,
 ) -> str:
-    """先打开目标页搜索 URL 并模拟浏览，再发 Ajax（降低裸接口特征）。"""
-    url = build_wn_search_url(keyword, city_name, page)
-    log(f"[拉勾网] 先在浏览器打开第 {page} 页搜索 URL...")
-    _sync_lagou_city_cookie(driver, city_name)
-    soft_navigate(driver, url, log)
-    human_pause(4.0, 7.0)
+    """在当前页模拟浏览；Referer 指向目标页，不直接跳转 pn>=2（会触发滑块）。"""
+    referer = lagou_referer_for_page(keyword, city_name, page)
+    lagou_ensure_search_session(driver, keyword, city_name, log)
+
+    try:
+        url = driver.current_url or ""
+        title = driver.title or ""
+    except WebDriverException:
+        url, title = "", ""
+
+    if page <= 1 or not is_lagou_search_url(url, keyword, title):
+        log(f"[拉勾网] 打开第 1 页搜索 URL 作为会话基准...")
+        base = build_wn_search_url(keyword, city_name, 1)
+        _sync_lagou_city_cookie(driver, city_name)
+        soft_navigate(driver, base, log)
+        human_pause(3.0, 6.0)
+    else:
+        log(
+            f"[拉勾网] 保持浏览器在当前搜索页，"
+            f"接口 Referer 指向第 {page} 页（不跳转 pn={page}）..."
+        )
+
     lagou_simulate_browse(driver, stop_check=stop_check)
     if page >= 4:
         extra = random.uniform(*LAGOU_AJAX_HIGH_PAGE_EXTRA)
-        log(f"[拉勾网] 第 {page} 页额外停留 {extra:.0f} 秒后再请求接口...")
+        log(f"[拉勾网] 第 {page} 页额外等待 {extra:.0f} 秒后再请求接口...")
         time.sleep(extra)
     global _last_lagou_ajax_at
     _last_lagou_ajax_at = 0.0
-    return resolve_lagou_referer(driver, keyword, city_name)
+    return referer
 
 
 def lagou_browse_warmup(

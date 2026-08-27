@@ -54,8 +54,8 @@ from .lagou_api import (
     is_lagou_search_url,
     is_lagou_waf_page,
     lagou_backoff_wait,
-    lagou_browse_page_before_ajax,
     lagou_prepare_ajax_page,
+    lagou_referer_for_page,
     lagou_simulate_browse,
     navigate_to_lagou_search,
     parse_lagou_positions,
@@ -809,7 +809,7 @@ class CrawlerEngine:
                         page, page_limit, seen, results,
                         contact_search_visited, log_callback, stop_check,
                         event, page_callback, pname, count,
-                        completed_pages,
+                        completed_pages, cfg, login_confirmation,
                     )
                     break
 
@@ -876,7 +876,7 @@ class CrawlerEngine:
                             next_target, page_limit, seen, results,
                             contact_search_visited, log_callback, stop_check,
                             event, page_callback, pname, count,
-                            completed_pages,
+                            completed_pages, cfg, login_confirmation,
                         )
                         break
                     ap_data = self._parse_open_lagou_page(
@@ -1026,22 +1026,58 @@ class CrawlerEngine:
         contact_search_visited: set,
         stop_check: Callable[[], bool],
         pname: str,
+        cfg,
+        login_confirmation,
     ) -> tuple[List[CompanyInfo], int]:
-        """限流后长暂停，浏览器打开目标页再试一次（仅 1 次 Ajax）。"""
-        wait = lagou_backoff_wait(4) + random.uniform(90.0, 150.0)
+        """限流后长暂停，回到第 1 页搜索再试一次 Ajax（Referer 仍指向目标页）。"""
+        wait = lagou_backoff_wait(3) + random.uniform(60.0, 90.0)
         log_callback(
-            f"[{pname}] 第 {page} 页限流持续，退避 {wait:.0f} 秒后刷新搜索页再试..."
+            f"[{pname}] 第 {page} 页限流持续，退避 {wait:.0f} 秒后回到第 1 页再试..."
         )
         time.sleep(wait)
-        referer = lagou_browse_page_before_ajax(
-            driver, keyword, city_name, page, log_callback,
-            stop_check=stop_check,
-        )
+        base_url = build_wn_search_url(keyword, city_name, 1)
+        soft_navigate(driver, base_url, log_callback)
+        human_pause(4.0, 7.0)
+        lagou_simulate_browse(driver, stop_check=stop_check)
+        if (
+            self._detect_captcha(driver, cfg, log_callback)
+            or is_lagou_waf_page(driver)
+        ):
+            log_callback(f"[{pname}] 请在浏览器中完成滑块验证...")
+            if not self._resolve_captcha_page(
+                driver, cfg, pname, base_url, login_confirmation,
+                log_callback, stop_check, reload_target=True,
+            ):
+                return [], 0
+        referer = lagou_referer_for_page(keyword, city_name, page)
         return self._lagou_fetch_via_ajax(
             driver, keyword, city_name, referer, page, seen,
             log_callback, contact_search_visited, stop_check,
             max_retries=1,
             skip_pre_pause=True,
+        )
+
+    def _lagou_try_resolve_waf(
+        self,
+        driver,
+        cfg,
+        pname: str,
+        keyword: str,
+        city_name: str,
+        login_confirmation,
+        log_callback: Callable[[str], None],
+        stop_check: Callable[[], bool],
+    ) -> bool:
+        if not (
+            self._detect_captcha(driver, cfg, log_callback)
+            or is_lagou_waf_page(driver)
+        ):
+            return True
+        base_url = build_wn_search_url(keyword, city_name, 1)
+        log_callback(f"[{pname}] 检测到滑块/验证页，请在浏览器中完成验证...")
+        return self._resolve_captcha_page(
+            driver, cfg, pname, base_url, login_confirmation,
+            log_callback, stop_check, reload_target=True,
         )
 
     def _lagou_ajax_paging_loop(
@@ -1062,6 +1098,8 @@ class CrawlerEngine:
         pname: str,
         count: int,
         completed_pages: int,
+        cfg,
+        login_confirmation,
     ) -> int:
         """仅用 Ajax 顺序拉取 current_page 之后的页，每页只请求一次。"""
         page = current_page
@@ -1079,6 +1117,12 @@ class CrawlerEngine:
                 driver, keyword, city_name, next_p, log_callback,
                 stop_check=stop_check,
             )
+            if not self._lagou_try_resolve_waf(
+                driver, cfg, pname, keyword, city_name,
+                login_confirmation, log_callback, stop_check,
+            ):
+                log_callback(f"[{pname}] 验证未通过，停止翻页（累计 {len(results)} 家）")
+                break
 
             ap_data, ajax_total = self._lagou_fetch_via_ajax(
                 driver, keyword, city_name, referer, next_p, seen,
@@ -1089,10 +1133,29 @@ class CrawlerEngine:
             if ajax_total:
                 limit = min(MAX_PAGES, ajax_total)
 
+            if not ap_data and (
+                self._detect_captcha(driver, cfg, log_callback)
+                or is_lagou_waf_page(driver)
+            ):
+                if self._lagou_try_resolve_waf(
+                    driver, cfg, pname, keyword, city_name,
+                    login_confirmation, log_callback, stop_check,
+                ):
+                    referer = lagou_referer_for_page(keyword, city_name, next_p)
+                    ap_data, ajax_total = self._lagou_fetch_via_ajax(
+                        driver, keyword, city_name, referer, next_p, seen,
+                        log_callback, contact_search_visited, stop_check,
+                        max_retries=1,
+                        skip_pre_pause=True,
+                    )
+                    if ajax_total:
+                        limit = min(MAX_PAGES, ajax_total)
+
             if not ap_data:
                 ap_data, ajax_total = self._lagou_cooldown_ajax_retry(
                     driver, keyword, city_name, list_url, next_p, seen,
                     log_callback, contact_search_visited, stop_check, pname,
+                    cfg, login_confirmation,
                 )
                 if ajax_total:
                     limit = min(MAX_PAGES, ajax_total)
@@ -1118,6 +1181,7 @@ class CrawlerEngine:
                 results[:] = results[:count]
                 break
             page = next_p
+            list_url = lagou_referer_for_page(keyword, city_name, next_p)
             human_pause(2.0, 4.0)
 
         return completed_pages
