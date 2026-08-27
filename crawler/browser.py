@@ -125,6 +125,18 @@ def manual_browser_ready(
                 continue
             if title == "登录" or ("登录" in title and "猎聘" in title):
                 continue
+        if platform_key == "lagou":
+            u = url.lower()
+            if "passport.lagou" in u or "/login" in u:
+                continue
+            block_titles = tuple(captcha_title_keywords) + (
+                "访问验证", "安全验证", "人机验证", "验证中心",
+            )
+            if any(kw in title for kw in block_titles):
+                return False
+            if "lagou.com" in u and title and title not in ("", "about:blank"):
+                return True
+            continue
         if any(kw in title for kw in captcha_title_keywords):
             return False
         if title and title not in ("", "about:blank"):

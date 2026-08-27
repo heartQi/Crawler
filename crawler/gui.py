@@ -403,11 +403,20 @@ class CrawlerApp:
             dlg, text="请在已打开的 Chrome 窗口中完成验证",
             font=self.FONT_BOLD_13, bg=CARD_BG, fg=TEXT_DARK,
         ).pack(pady=(22, 10))
+        tip = (
+            "程序已打开普通 Chrome（无「自动化控制」提示）。\n"
+            "拉勾网：请先在首页手动搜索关键词，再完成滑块验证。\n"
+            "滑块请拖到尽头；若失败请先点浏览器刷新再重试。\n"
+            "验证通过后会自动继续；若未自动继续，也可点击「已完成」。"
+            if platform_name == "拉勾网"
+            else
+            "程序已打开普通 Chrome（无「自动化控制」提示）。\n"
+            "请在该窗口完成滑块/安全验证；若失败请先点浏览器刷新再重试。\n"
+            "验证通过后会自动继续；若未自动继续，也可点击「已完成」。"
+        )
         self._make_label(
             dlg,
-            text="程序已打开普通 Chrome（无「自动化控制」提示）。\n"
-                 "请在该窗口完成滑块/安全验证；若失败请先点浏览器刷新再重试。\n"
-                 "验证通过后会自动继续；若未自动继续，也可点击「已完成」。",
+            text=tip,
             font=self.FONT_10, bg=CARD_BG, fg=TEXT_LIGHT,
             justify=tk.LEFT,
         ).pack(padx=24)

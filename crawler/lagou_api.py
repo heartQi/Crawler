@@ -58,10 +58,13 @@ def extract_lagou_contact(position: dict) -> tuple[str, str]:
     return person or "—", info or "—"
 
 LIST_URL = "https://www.lagou.com/jobs/list_{kw}"
+WN_SEARCH_URL = "https://www.lagou.com/wn/search/"
 AJAX_URL = "https://www.lagou.com/jobs/positionAjax.json?needAddtionalResult=false"
+MANUAL_SEARCH_TIMEOUT = 300
 
 
 def build_list_url(keyword: str, city: str = "", page: int = 1) -> str:
+    """拉勾搜索页 URL（用于 Ajax Referer，不用于程序自动打开）。"""
     kw_seg = urllib.parse.quote(keyword)
     url = f"{LIST_URL.format(kw=kw_seg)}?fromSearch=true"
     if city and city != "全国":
@@ -69,6 +72,34 @@ def build_list_url(keyword: str, city: str = "", page: int = 1) -> str:
     if page > 1:
         url += f"&pn={page}"
     return url
+
+
+def is_lagou_blocked_url(url: str = "", title: str = "") -> bool:
+    u = (url or "").lower()
+    t = title or ""
+    if "passport.lagou" in u or "/login" in u:
+        return True
+    if any(kw in t for kw in ("访问验证", "安全验证", "人机验证", "验证中心")):
+        return True
+    return False
+
+
+def is_lagou_search_url(url: str, keyword: str = "") -> bool:
+    if not url or "lagou.com" not in url.lower():
+        return False
+    if is_lagou_blocked_url(url):
+        return False
+    u = url.lower()
+    if "/wn/search" in u or "/jobs/list" in u or "kd=" in u or "key=" in u:
+        if not keyword:
+            return True
+        decoded = urllib.parse.unquote(url)
+        return (
+            keyword in decoded
+            or urllib.parse.quote(keyword) in url
+            or keyword.replace(" ", "") in decoded.replace(" ", "")
+        )
+    return False
 
 
 def is_rate_limited(data: Optional[dict]) -> bool:

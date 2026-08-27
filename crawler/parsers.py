@@ -434,8 +434,9 @@ PLATFORM_CONFIG = {
         "empty_css": ".search-no-result, .empty-position",
         "parse_fn": parse_lagou_item,
         "dedupe_by": "name",
-        "captcha_title_keywords": ["访问验证"],
-        "captcha_body_keywords": ["验证失败", "请进行验证"],
+        "captcha_title_keywords": ["访问验证", "安全验证", "人机验证"],
+        "captcha_body_keywords": ["验证失败", "请进行验证", "滑动验证", "请完成验证"],
+        "captcha_fail_keywords": ["验证失败", "请刷新", "操作过于频繁", "网络繁忙"],
         "captcha_css": "iframe[src*='verify'], iframe[src*='captcha'], "
                        ".geetest_panel, #tcaptcha, [class*='verify-wrap'], [class*='access-verify']",
         "method": "browser",

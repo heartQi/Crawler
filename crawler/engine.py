@@ -47,6 +47,7 @@ from .lagou_api import (
     enrich_lagou_companies,
     fetch_lagou_page_with_retry,
     format_lagou_error,
+    is_lagou_search_url,
     parse_lagou_positions,
 )
 from .lagou_company import fill_contacts_from_company_pages
@@ -246,7 +247,13 @@ class CrawlerEngine:
                 if wait_manual_browser_ready(
                     platform_key, captcha_titles, timeout=18.0,
                 ):
-                    log_callback(f"[{pname}] 页面已就绪，自动继续查询...")
+                    if platform_key == "lagou":
+                        log_callback(
+                            f"[{pname}] Chrome 已打开拉勾首页，"
+                            f"连接后请在浏览器手动搜索关键词（避免程序自动跳转触发验证）..."
+                        )
+                    else:
+                        log_callback(f"[{pname}] 页面已就绪，自动继续查询...")
                 elif platform_key == "liepin":
                     log_callback(
                         f"[{pname}] 请在 Chrome 打开 www.liepin.com，"
@@ -619,18 +626,18 @@ class CrawlerEngine:
                 "lagou", login_confirmation, log_callback, pname,
             )
             list_url = build_list_url(keyword, city_name)
-            log_callback(f"[{pname}] 打开搜索页: {list_url}")
-            safe_get(driver, list_url, log_callback)
-            human_pause(2.0, 3.0)
-
-            if not self._resolve_captcha_page(
-                driver, cfg, pname, list_url, login_confirmation,
-                log_callback, stop_check,
+            if not self._wait_for_lagou_user_search(
+                driver, keyword, city_name, cfg, pname, list_url,
+                login_confirmation, log_callback, stop_check,
             ):
                 return CrawlResult(
                     [], CRAWL_BLOCKED,
-                    f"{pname} 验证未通过。页面标题：{driver.title}",
+                    f"{pname} 未能获取搜索结果。"
+                    f"请在 Chrome 手动搜索「{keyword}」并完成滑块验证。"
+                    f"当前：{driver.title}",
                 )
+
+            human_pause(1.5, 2.5)
 
             total_pages = read_lagou_total_pages(driver)
             page_limit = min(MAX_PAGES, total_pages or 30)
@@ -735,7 +742,7 @@ class CrawlerEngine:
                     log_callback(f"[{pname}] 翻页后触发验证，请完成验证后继续...")
                     if not self._resolve_captcha_page(
                         driver, cfg, pname, list_url, login_confirmation,
-                        log_callback, stop_check,
+                        log_callback, stop_check, reload_target=False,
                     ):
                         log_callback(f"[{pname}] 验证未通过，保留已采集数据")
                         break
@@ -880,9 +887,117 @@ class CrawlerEngine:
         return page_data
 
     @staticmethod
+    def _has_visible_results(driver, cfg) -> bool:
+        item_css = cfg.get("item_css", "")
+        if not item_css:
+            return False
+        try:
+            for item in driver.find_elements(By.CSS_SELECTOR, item_css):
+                if item.is_displayed():
+                    size = item.size or {}
+                    if size.get("height", 0) > 0:
+                        return True
+        except WebDriverException:
+            pass
+        return False
+
+    def _wait_for_lagou_user_search(
+        self,
+        driver,
+        keyword: str,
+        city_name: str,
+        cfg,
+        pname: str,
+        list_url: str,
+        login_confirmation,
+        log_callback: Callable[[str], None],
+        stop_check: Callable[[], bool],
+        timeout: float = 300,
+    ) -> bool:
+        """等待用户在 Chrome 手动搜索，避免 Selenium 自动跳转触发验证。"""
+        if is_lagou_search_url(driver.current_url or "", keyword):
+            if find_current_page_lagou_items(driver):
+                log_callback(f"[{pname}] 已在搜索结果页")
+                return True
+
+        log_callback(f"[{pname}] 请在 Chrome 中手动搜索（程序不会自动打开搜索页）：")
+        log_callback(f"[{pname}]   1. 在拉勾首页搜索框输入「{keyword}」")
+        if city_name and city_name != "全国":
+            log_callback(f"[{pname}]   2. 城市选择「{city_name}」")
+            log_callback(f"[{pname}]   3. 回车搜索；若出现滑块请拖到尽头")
+        else:
+            log_callback(f"[{pname}]   2. 回车搜索；若出现滑块请拖到尽头")
+        log_callback(f"[{pname}] 等待搜索结果（最多 {int(timeout)} 秒）...")
+
+        deadline = time.monotonic() + timeout
+        captcha_round = 0
+        last_status = 0.0
+
+        while time.monotonic() < deadline:
+            if stop_check():
+                return False
+
+            if find_current_page_lagou_items(driver):
+                log_callback(f"[{pname}] 已检测到职位列表，开始采集")
+                return True
+
+            if self._detect_captcha(driver, cfg, log_callback):
+                captcha_round += 1
+                log_callback(
+                    f"[{pname}] 检测到验证页，请在浏览器完成滑块；"
+                    f"失败时请手动刷新页面后重试"
+                )
+                if login_confirmation and login_confirmation(pname, 180):
+                    human_pause(2.0, 3.0)
+                    if find_current_page_lagou_items(driver):
+                        return True
+                    continue
+                return False
+
+            now = time.monotonic()
+            if now - last_status >= 15:
+                try:
+                    cur_url = (driver.current_url or "")[:80]
+                except WebDriverException:
+                    cur_url = "(未知)"
+                log_callback(f"[{pname}] 等待手动搜索… 当前页: {cur_url}")
+                last_status = now
+
+            time.sleep(2)
+
+        return False
+
+    @staticmethod
+    def _try_refresh_on_verify_failure(driver, cfg, log_callback=None, enabled: bool = True) -> bool:
+        if not enabled:
+            return False
+        fail_keywords = cfg.get("captcha_fail_keywords", [])
+        if not fail_keywords:
+            return False
+        try:
+            body = (driver.find_element(By.TAG_NAME, "body").text or "").strip()
+        except WebDriverException:
+            return False
+        if not any(kw in body for kw in fail_keywords):
+            return False
+        if log_callback:
+            log_callback("[验证] 检测到「验证失败」，正在自动刷新页面...")
+        try:
+            driver.refresh()
+        except WebDriverException:
+            safe_get(driver, driver.current_url or "", log_callback)
+        human_pause(2.5, 4.0)
+        return True
+
+    @staticmethod
     def _detect_captcha(driver, cfg, log_callback=None) -> bool:
         """检测是否处于验证/安全拦截页（避免误匹配正文里的普通文案）。"""
         time.sleep(0.4)
+
+        # 职位列表已可见时，即使标题仍显示「访问验证」也视为通过。
+        if CrawlerEngine._has_visible_results(driver, cfg):
+            return False
+
         title = driver.title or ""
 
         for kw in cfg.get("captcha_title_keywords", []):
@@ -890,15 +1005,6 @@ class CrawlerEngine:
                 if log_callback:
                     log_callback(f"[验证检测] 标题匹配 '{kw}'")
                 return True
-
-        # 结果卡片已恢复时，页面中残留的隐藏验证 iframe 或失败文案不应继续
-        # 被判定为拦截页。
-        try:
-            items = driver.find_elements(By.CSS_SELECTOR, cfg.get("item_css", ""))
-            if any(item.is_displayed() for item in items):
-                return False
-        except WebDriverException:
-            pass
 
         captcha_css = cfg.get("captcha_css", "")
         if captcha_css:
@@ -948,6 +1054,7 @@ class CrawlerEngine:
         login_confirmation,
         log_callback,
         stop_check,
+        reload_target: bool = True,
     ) -> bool:
         """等待用户手动完成验证，支持刷新后重试。"""
         if not self._detect_captcha(driver, cfg, log_callback):
@@ -964,7 +1071,12 @@ class CrawlerEngine:
         for round_i in range(max_rounds):
             if stop_check():
                 return False
-            if not self._detect_captcha(driver, cfg):
+
+            self._try_refresh_on_verify_failure(
+                driver, cfg, log_callback, enabled=reload_target,
+            )
+
+            if not self._detect_captcha(driver, cfg, log_callback):
                 log_callback(f"[{pname}] 验证已通过，继续查询...")
                 return True
 
@@ -983,7 +1095,11 @@ class CrawlerEngine:
                 return False
 
             human_pause(1.5, 2.5)
-            human_pause(2.0, 3.0)
+            if reload_target and target_url:
+                log_callback(f"[{pname}] 正在重新加载搜索页...")
+                safe_get(driver, target_url, log_callback)
+                human_pause(2.0, 3.5)
+                self._try_refresh_on_verify_failure(driver, cfg, log_callback)
 
         return not self._detect_captcha(driver, cfg, log_callback)
 
