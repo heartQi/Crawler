@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import re
 import time
+import urllib.parse
 from typing import Callable, Iterable, List, Tuple
 
 from selenium.common.exceptions import StaleElementReferenceException, WebDriverException
@@ -162,6 +163,18 @@ def read_lagou_total_pages(driver) -> int:
     return 0
 
 
+def _read_lagou_page_from_url(driver) -> int:
+    try:
+        qs = urllib.parse.parse_qs(
+            urllib.parse.urlparse(driver.current_url or "").query,
+        )
+        pn = (qs.get("pn") or ["1"])[0]
+        val = int(pn)
+        return val if val > 0 else 0
+    except (TypeError, ValueError, WebDriverException):
+        return 0
+
+
 def read_lagou_current_page(driver) -> int:
     try:
         value = driver.execute_script(_READ_PAGE_JS)
@@ -187,15 +200,19 @@ def read_lagou_current_page(driver) -> int:
             return int(m.group(1))
     except WebDriverException:
         pass
+
+    url_page = _read_lagou_page_from_url(driver)
+    if url_page > 0:
+        return url_page
     return 0
 
 
 def sync_lagou_page_from_browser(driver, expected_min: int = 0) -> int:
-    """读取浏览器分页条当前页码。"""
+    """读取浏览器分页条或 URL 中的当前页码。"""
     page = read_lagou_current_page(driver)
     if page > 0:
         return page
-    return expected_min
+    return 0
 
 
 def _is_disabled(el) -> bool:
@@ -373,3 +390,42 @@ def go_next_lagou_page(
 
     log(f"[拉勾网] 第 {next_page} 页未能确认加载，停止翻页")
     return current_page
+
+
+def go_to_lagou_page(
+    driver,
+    target_page: int,
+    current_page: int,
+    old_signature: tuple,
+    log: Callable[[str], None] = print,
+) -> int:
+    """尽量将浏览器翻到 target_page（优先点页码，其次连点下一页）。"""
+    if target_page <= current_page:
+        synced = read_lagou_current_page(driver)
+        return synced if synced and synced >= current_page else current_page
+
+    page_btn = _find_lagou_page_button(driver, target_page)
+    if page_btn is not None:
+        log(f"[拉勾网] 跳转到第 {target_page} 页...")
+        try:
+            _click_element(driver, page_btn)
+        except WebDriverException:
+            page_btn = None
+        if page_btn is not None:
+            turned = _wait_page_turn(
+                driver, current_page, target_page, old_signature, log,
+            )
+            if turned >= target_page:
+                return turned
+
+    page = current_page
+    sig = old_signature
+    while page < target_page:
+        next_p = go_next_lagou_page(driver, page, sig, log)
+        if next_p <= page:
+            break
+        page = next_p
+        sig = lagou_position_signature(find_current_page_lagou_items(driver))
+        if page >= target_page:
+            return page
+    return page

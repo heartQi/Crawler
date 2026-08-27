@@ -54,6 +54,7 @@ def launch_manual_chrome(
     start_url: str = "https://www.lagou.com/",
     port: int = REMOTE_DEBUG_PORT,
     profile_dir: str = MANUAL_BROWSER_PROFILE_DIR,
+    proxy_server: str = "",
 ) -> None:
     """启动普通 Chrome（非 WebDriver），供用户手动完成验证。"""
     chrome = find_chrome_executable()
@@ -61,15 +62,18 @@ def launch_manual_chrome(
         raise RuntimeError("未找到 Google Chrome，请先安装 Chrome 浏览器。")
 
     os.makedirs(profile_dir, exist_ok=True)
+    args = [
+        chrome,
+        f"--remote-debugging-port={port}",
+        f"--user-data-dir={profile_dir}",
+        "--no-first-run",
+        "--no-default-browser-check",
+    ]
+    if proxy_server:
+        args.append(f"--proxy-server={proxy_server}")
+    args.append(start_url)
     subprocess.Popen(
-        [
-            chrome,
-            f"--remote-debugging-port={port}",
-            f"--user-data-dir={profile_dir}",
-            "--no-first-run",
-            "--no-default-browser-check",
-            start_url,
-        ],
+        args,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         close_fds=True,

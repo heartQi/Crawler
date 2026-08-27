@@ -35,6 +35,25 @@ ELEMENT_WAIT_TIMEOUT = 15
 LOGIN_WAIT_TIMEOUT = 300
 HUMAN_DELAY_RANGE = (0.6, 1.4)
 
+# ── 第一步：零成本反限流节奏（通用） ──
+CRAWL_REQUEST_DELAY = (3.0, 8.0)         # 模拟真人：单次操作随机 3~8 秒
+CRAWL_COOLDOWN_EVERY = 50                # 每 N 次请求插入冷却
+CRAWL_COOLDOWN_DURATION = (15.0, 30.0)   # 冷却时长（秒）
+CRAWL_BACKOFF_BASE = 8.0                 # 429/WAF 退避基数
+CRAWL_BACKOFF_FACTOR = 2.0
+CRAWL_BACKOFF_MAX = 180.0
+
+# 拉勾 Ajax 专用（接口更敏感，间隔长于通用节奏）
+LAGOU_AJAX_INTERVAL = (45.0, 75.0)       # 两次接口请求之间的随机等待（秒）
+LAGOU_AJAX_PAGE_EXTRA = (8.0, 15.0)        # 每往后翻一页额外增加的随机等待
+LAGOU_AJAX_LONG_PAUSE_EVERY = 2            # 每 N 次 Ajax 长休息一次
+LAGOU_AJAX_LONG_PAUSE = (90.0, 150.0)     # 长休息时长（秒）
+LAGOU_AJAX_HIGH_PAGE_EXTRA = (50.0, 80.0)  # 第 4 页起浏览器停留额外等待
+LAGOU_BACKOFF_BASE = 60.0                  # 限流退避基数（秒）
+LAGOU_BACKOFF_FACTOR = 2.0
+LAGOU_BACKOFF_JITTER = (20.0, 45.0)
+LAGOU_AJAX_MAX_RETRIES = 2                 # 单页限流后最多再试次数（避免猛砸）
+
 # ──────────────────────────────────────────────
 # User-Agent 池
 # ──────────────────────────────────────────────

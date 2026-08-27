@@ -76,6 +76,15 @@ def load_platform_login_url(
     return str(item.get("url") or defaults.get(platform_key, "")).strip()
 
 
+def load_platform_proxy(
+    platform_key: str,
+    path: str = CREDENTIALS_FILE,
+) -> str:
+    """读取平台 HTTP 代理（第二步可选），格式：http://user:pass@host:port"""
+    item = _pick_account(load_all_accounts(path), platform_key)
+    return str(item.get("proxy") or item.get("http_proxy") or "").strip()
+
+
 def resolve_credentials(
     platform_key: str,
     credentials: Optional[Credentials] = None,

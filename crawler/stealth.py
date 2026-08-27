@@ -11,10 +11,9 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from selenium.webdriver.chrome.webdriver import WebDriver
 
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-)
+from .config import CRAWL_REQUEST_DELAY, USER_AGENTS
+
+USER_AGENT = USER_AGENTS[0]
 
 # 在 document 创建前注入，覆盖常见自动化探测点
 STEALTH_JS = """
@@ -78,7 +77,8 @@ WebGLRenderingContext.prototype.getParameter = function(parameter) {
 
 
 def apply_stealth(driver: "WebDriver") -> None:
-    """通过 CDP 注入脚本并统一 User-Agent，降低被识别为自动化的概率。"""
+    """通过 CDP 注入脚本并随机 User-Agent，降低被识别为自动化的概率。"""
+    ua = random.choice(USER_AGENTS)
     driver.execute_cdp_cmd(
         "Page.addScriptToEvaluateOnNewDocument",
         {"source": STEALTH_JS},
@@ -86,15 +86,19 @@ def apply_stealth(driver: "WebDriver") -> None:
     driver.execute_cdp_cmd(
         "Network.setUserAgentOverride",
         {
-            "userAgent": USER_AGENT,
+            "userAgent": ua,
             "acceptLanguage": "zh-CN,zh;q=0.9,en;q=0.8",
             "platform": "Win32",
         },
     )
 
 
-def human_pause(min_s: float = 0.8, max_s: float = 2.0) -> None:
-    time.sleep(random.uniform(min_s, max_s))
+def human_pause(min_s: float | None = None, max_s: float | None = None) -> None:
+    if min_s is None and max_s is None:
+        lo, hi = CRAWL_REQUEST_DELAY
+    else:
+        lo, hi = min_s or 0.8, max_s or 2.0
+    time.sleep(random.uniform(lo, hi))
 
 
 def warm_up_lagou(driver: "WebDriver", stop_check=None) -> None:
