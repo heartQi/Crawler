@@ -1,5 +1,6 @@
 .browser_profile/
 .manual_browser/
 .cookies.json
+.credentials.json
 __pycache__/
 *.py[cod]

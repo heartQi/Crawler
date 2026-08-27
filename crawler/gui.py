@@ -304,7 +304,7 @@ class CrawlerApp:
         ).pack(pady=(20, 8))
         self._make_label(
             dlg,
-            text="账号和密码仅保存在内存中，可全部留空并在打开的浏览器中自行登录。\n"
+            text="可在此临时输入；留空则自动读取项目根目录 .credentials.json。\n"
                  "短信、滑块或验证码必须由你手动完成。",
             font=self.FONT_10, bg=CARD_BG, fg=TEXT_LIGHT,
             justify=tk.LEFT,
@@ -474,7 +474,8 @@ class CrawlerApp:
         self._crawl_stop = False
         self._stop_event.clear()
         if "boss" in selected and self._boss_credentials is None and not self._boss_logged_in:
-            self._boss_credentials = Credentials()
+            from .accounts import load_platform_credentials
+            self._boss_credentials = load_platform_credentials("boss") or Credentials()
         self.crawl_btn.config(state=tk.DISABLED, text="查询中...")
         self.stop_btn.config(state=tk.NORMAL)
         self.status_label.config(text=f"查询中  {city_name}...")
@@ -508,14 +509,19 @@ class CrawlerApp:
                 self.progress_label.config(text=f"{idx}/{total} 平台")
             self.root.after(0, _set_platform_status)
             try:
+                from .accounts import resolve_credentials
+
                 result = self.engine.crawl(
                     pk, keyword, city_code=city_code, city_name=city_name,
                     stop_check=lambda: self._crawl_stop,
                     log_callback=lambda msg: print(msg),
                     stop_event=self._stop_event,
                     page_callback=self._on_page_collected,
-                    credentials=self._boss_credentials if pk == "boss" else None,
-                    login_confirmation=self._wait_for_login_confirmation if pk in ("boss", "lagou") else None,
+                    credentials=resolve_credentials(
+                        pk,
+                        self._boss_credentials if pk == "boss" else None,
+                    ) if pk in ("boss", "liepin") else None,
+                    login_confirmation=self._wait_for_login_confirmation if pk in ("boss", "lagou", "liepin") else None,
                 )
                 if result.status == CRAWL_OK:
                     statuses.append(("ok", f"{pname}: {result.message}"))

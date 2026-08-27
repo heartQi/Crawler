@@ -21,6 +21,7 @@ COOKIE_FILE = os.path.join(
     ".cookies.json",
 )
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CREDENTIALS_FILE = os.path.join(PROJECT_DIR, ".credentials.json")
 BROWSER_PROFILE_DIR = os.path.join(PROJECT_DIR, ".browser_profile")
 MANUAL_BROWSER_PROFILE_DIR = os.path.join(PROJECT_DIR, ".manual_browser")
 REMOTE_DEBUG_PORT = 9222

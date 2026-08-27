@@ -1,6 +1,11 @@
 import unittest
 from threading import Event
 
+import json
+import os
+import tempfile
+
+from crawler.accounts import load_platform_credentials
 from crawler.auth import Credentials, LoginCoordinator
 from crawler.engine import CrawlerEngine
 from crawler.models import CompanyInfo
@@ -44,6 +49,21 @@ class FakeDriver:
 
 
 class CrawlerUnitTests(unittest.TestCase):
+    def test_load_credentials_from_file(self):
+        payload = {"boss": {"username": "13800000000", "password": "secret"}}
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".json", delete=False, encoding="utf-8",
+        ) as f:
+            json.dump(payload, f)
+            path = f.name
+        try:
+            creds = load_platform_credentials("boss", path)
+            self.assertIsNotNone(creds)
+            self.assertEqual(creds.username, "13800000000")
+            self.assertEqual(creds.password, "secret")
+        finally:
+            os.remove(path)
+
     def test_credentials_clear(self):
         credentials = Credentials("13800000000", "secret")
         credentials.clear()

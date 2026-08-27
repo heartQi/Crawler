@@ -9,7 +9,7 @@ import secrets
 import string
 import time
 import urllib.parse
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, TYPE_CHECKING
 
 from selenium.common.exceptions import TimeoutException, WebDriverException
 from selenium.webdriver.common.action_chains import ActionChains
@@ -20,6 +20,11 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 from .browser import safe_get
 from .models import CompanyInfo
+
+if TYPE_CHECKING:
+    from threading import Event
+
+    from .auth import Credentials
 
 SEARCH_API = "https://api-c.liepin.com/api/com.liepin.searchfront4c.pc-search-job"
 HOME = "https://www.liepin.com"
@@ -304,7 +309,7 @@ def escape_to_liepin_home(
     log: Callable[[str], None] = print,
 ) -> bool:
     """从 wow / 登录页退回猎聘首页。"""
-    log("[猎聘] 遇到登录拦截页，正在返回首页（请勿登录/注册）...")
+    log("[猎聘] 正在返回猎聘首页...")
     for _ in range(3):
         try:
             driver.execute_script("window.history.back();")
@@ -321,6 +326,62 @@ def escape_to_liepin_home(
         return _is_liepin_home_url(url, driver.title or "")
     except WebDriverException:
         return False
+
+
+def ensure_liepin_session(
+    driver,
+    stop_event: Optional["Event"] = None,
+    credentials: Optional["Credentials"] = None,
+    login_confirmation: Optional[Callable[[str, int], bool]] = None,
+    log: Callable[[str], None] = print,
+) -> bool:
+    """有凭据时尝试登录；已登录或无需登录则返回 True。"""
+    from threading import Event
+
+    from .accounts import resolve_credentials
+    from .auth import LoginCoordinator
+
+    event = stop_event or Event()
+    auth = LoginCoordinator(driver, event, log)
+    if auth.is_liepin_authenticated():
+        log("[猎聘] 已登录")
+        return True
+
+    creds = resolve_credentials("liepin", credentials)
+    if creds and (creds.username or creds.password):
+        log("[猎聘] 检测到登录页，正在使用配置文件账号登录...")
+        return auth.ensure_liepin_login(creds, login_confirmation)
+
+    try:
+        url = driver.current_url or ""
+        title = driver.title or ""
+    except WebDriverException:
+        return True
+    if is_liepin_blocked_page(url, title):
+        log("[猎聘] 出现登录页，请在 .credentials.json 配置 liepin 账号密码")
+        return False
+    return True
+
+
+def handle_liepin_blocked(
+    driver,
+    stop_event: Optional["Event"] = None,
+    credentials: Optional["Credentials"] = None,
+    login_confirmation: Optional[Callable[[str, int], bool]] = None,
+    log: Callable[[str], None] = print,
+) -> bool:
+    """拦截页：优先尝试登录，失败则退回首页。"""
+    if ensure_liepin_session(
+        driver, stop_event, credentials, login_confirmation, log,
+    ):
+        try:
+            url = driver.current_url or ""
+            title = driver.title or ""
+        except WebDriverException:
+            return True
+        if not is_liepin_blocked_page(url, title):
+            return True
+    return escape_to_liepin_home(driver, log)
 
 
 def _on_liepin_search_page(driver, keyword: str = "") -> bool:
@@ -647,17 +708,30 @@ def wait_for_liepin_user_search(
     city_code: str = "",
     log: Callable[[str], None] = print,
     timeout: float = MANUAL_SEARCH_TIMEOUT,
+    stop_event: Optional["Event"] = None,
+    credentials: Optional["Credentials"] = None,
+    login_confirmation: Optional[Callable[[str, int], bool]] = None,
 ) -> dict:
-    """在首页等待用户手动搜索（不自动打开搜索页，避免 wow 登录拦截）。"""
+    """在首页等待用户手动搜索；有凭据时遇到登录页会自动尝试登录。"""
     install_liepin_capture_hook(driver)
     clear_liepin_capture(driver)
     _focus_best_liepin_tab(driver)
-    escape_to_liepin_home(driver, log)
+    handle_liepin_blocked(
+        driver, stop_event, credentials, login_confirmation, log,
+    )
 
-    log("[猎聘] 请在 Chrome 首页手动搜索（程序不会自动打开搜索页）：")
+    from .accounts import load_platform_credentials
+
+    has_creds = bool(load_platform_credentials("liepin") or (
+        credentials and (credentials.username or credentials.password)
+    ))
+    log("[猎聘] 请在 Chrome 首页手动搜索：")
     log(f"[猎聘]   1. 确认地址为 www.liepin.com 首页")
     log(f"[猎聘]   2. 在搜索框输入「{keyword}」并回车")
-    log("[猎聘]   3. 若出现登录/注册页，请点「后退」，不要登录")
+    if has_creds:
+        log("[猎聘]   3. 若出现登录页，程序会自动填写账号；短信验证码请在浏览器完成")
+    else:
+        log("[猎聘]   3. 若出现登录页，请在 .credentials.json 配置 liepin 账号")
     log(f"[猎聘] 等待搜索结果（最多 {int(timeout)} 秒）...")
 
     deadline = time.monotonic() + timeout
@@ -681,12 +755,14 @@ def wait_for_liepin_user_search(
 
         if is_liepin_blocked_page(url, title):
             if not blocked_warned:
-                log(
-                    "[猎聘] 这是登录拦截页（不是滑块）！"
-                    "请勿登录，程序将返回首页，请你在首页重新搜索"
-                )
+                if has_creds:
+                    log("[猎聘] 检测到登录拦截页，正在尝试自动登录...")
+                else:
+                    log("[猎聘] 检测到登录拦截页，请配置 .credentials.json 中的 liepin 账号")
                 blocked_warned = True
-            escape_to_liepin_home(driver, log)
+            handle_liepin_blocked(
+                driver, stop_event, credentials, login_confirmation, log,
+            )
             blocked_warned = False
             continue
 
@@ -716,7 +792,7 @@ def wait_for_liepin_user_search(
 
     return {
         "flag": 0,
-        "msg": "等待超时。请在猎聘首页手动搜索，不要登录；若反复出现登录页请删除 .manual_browser",
+        "msg": "等待超时。请在猎聘首页手动搜索；若反复出现登录页请配置 .credentials.json 或删除 .manual_browser",
     }
 
 
@@ -724,8 +800,11 @@ def wait_liepin_challenge_clear(
     driver,
     log: Callable[[str], None] = print,
     timeout: float = WOW_WAIT_TIMEOUT,
+    stop_event: Optional["Event"] = None,
+    credentials: Optional["Credentials"] = None,
+    login_confirmation: Optional[Callable[[str, int], bool]] = None,
 ) -> bool:
-    """wow / 登录拦截页：退回首页，不等待滑块。"""
+    """wow / 登录拦截页：有凭据则尝试登录，否则退回首页。"""
     try:
         url = driver.current_url or ""
         title = driver.title or ""
@@ -735,7 +814,9 @@ def wait_liepin_challenge_clear(
     if not is_liepin_blocked_page(url, title):
         return True
 
-    return escape_to_liepin_home(driver, log)
+    return handle_liepin_blocked(
+        driver, stop_event, credentials, login_confirmation, log,
+    )
 
 
 def _prepare_liepin_home_page(driver, log: Callable[[str], None] = print) -> None:
@@ -933,8 +1014,11 @@ def liepin_api_requires_login(data: Optional[dict]) -> bool:
 def ensure_liepin_home_tab(
     driver,
     log: Callable[[str], None] = print,
+    stop_event: Optional["Event"] = None,
+    credentials: Optional["Credentials"] = None,
+    login_confirmation: Optional[Callable[[str, int], bool]] = None,
 ) -> bool:
-    """确保在 www.liepin.com 首页（不进入登录页 / wow 验证页）。"""
+    """确保在 www.liepin.com 首页；有凭据时可在登录页自动登录。"""
 
     def _is_home(url: str, title: str = "") -> bool:
         return _is_liepin_home_url(url, title)
@@ -958,14 +1042,22 @@ def ensure_liepin_home_tab(
         except WebDriverException:
             continue
         if "liepin.com" in url and not url.startswith("about:"):
-            log("[猎聘] 当前在登录页，正在返回首页（无需登录账号）...")
-            safe_get(driver, HOME, log)
-            time.sleep(random.uniform(2.0, 3.0))
-            url = driver.current_url or ""
-            if _is_home(url, driver.title or ""):
-                return True
+            if is_liepin_blocked_page(url, driver.title or ""):
+                log("[猎聘] 当前在登录页，正在尝试登录...")
+                if handle_liepin_blocked(
+                    driver, stop_event, credentials, login_confirmation, log,
+                ):
+                    url = driver.current_url or ""
+                    if _is_home(url, driver.title or ""):
+                        return True
+            else:
+                safe_get(driver, HOME, log)
+                time.sleep(random.uniform(2.0, 3.0))
+                url = driver.current_url or ""
+                if _is_home(url, driver.title or ""):
+                    return True
             if is_liepin_login_page(url, driver.title or ""):
-                log("[猎聘] 仍停留在登录页。请手动在地址栏打开 www.liepin.com，不要点登录")
+                log("[猎聘] 仍停留在登录页，请检查 .credentials.json 中的 liepin 账号")
                 return False
             break
 
@@ -978,7 +1070,7 @@ def ensure_liepin_home_tab(
         if _is_home(url, title):
             return True
         if is_liepin_login_page(url, title):
-            log("[猎聘] 被导向登录页。猎聘搜索无需登录，请删除 .manual_browser 后重试")
+            log("[猎聘] 被导向登录页，请配置 .credentials.json 中的 liepin 账号后重试")
             return False
         if "wow.liepin" in url:
             log("[猎聘] 被重定向到验证页，请关闭 Chrome 并删除 .manual_browser 后重试")
@@ -1255,12 +1347,17 @@ def navigate_to_liepin_search(
     city_code: str = "",
     page: int = 1,
     log: Callable[[str], None] = print,
+    stop_event: Optional["Event"] = None,
+    credentials: Optional["Credentials"] = None,
+    login_confirmation: Optional[Callable[[str, int], bool]] = None,
 ) -> bool:
-    """优先接口；否则等待用户在浏览器手动搜索（避免自动操作触发登录）。"""
+    """优先接口；否则等待用户在浏览器手动搜索。"""
     install_liepin_capture_hook(driver)
     clear_liepin_capture(driver)
 
-    if not ensure_liepin_home_tab(driver, log):
+    if not ensure_liepin_home_tab(
+        driver, log, stop_event, credentials, login_confirmation,
+    ):
         return False
 
     if _on_liepin_search_page(driver, keyword):
@@ -1274,9 +1371,12 @@ def navigate_to_liepin_search(
         else:
             if data.get("msg"):
                 log(f"[猎聘] 接口: {data.get('msg')}")
-            log("[猎聘] 请在浏览器首页手动搜索（勿让程序打开搜索页）")
+            log("[猎聘] 请在浏览器首页手动搜索...")
             data = wait_for_liepin_user_search(
                 driver, keyword, city_name, city_code, log,
+                stop_event=stop_event,
+                credentials=credentials,
+                login_confirmation=login_confirmation,
             )
 
     if is_liepin_success(data):

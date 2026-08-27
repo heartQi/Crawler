@@ -18,6 +18,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
+from .accounts import resolve_credentials
 from .auth import Credentials, LoginCoordinator
 from .browser import (
     attach_to_chrome,
@@ -53,6 +54,7 @@ from .liepin_api import (
     build_liepin_list_url,
     collect_liepin_page_data,
     ensure_liepin_home_tab,
+    ensure_liepin_session,
     extract_jobs_from_dom,
     fetch_liepin_page_with_retry,
     format_liepin_error,
@@ -307,7 +309,7 @@ class CrawlerEngine:
         if platform_key == "liepin":
             return self._crawl_liepin(
                 keyword, city_name, city_code, count, stop_check, log_callback,
-                stop_event, page_callback, login_confirmation,
+                stop_event, page_callback, login_confirmation, credentials,
             )
 
         event = stop_event or Event()
@@ -326,7 +328,10 @@ class CrawlerEngine:
 
             if cfg.get("requires_login"):
                 auth = LoginCoordinator(driver, event, log_callback)
-                if not auth.ensure_boss_login(credentials, login_confirmation):
+                if not auth.ensure_boss_login(
+                    resolve_credentials(platform_key, credentials),
+                    login_confirmation,
+                ):
                     message = "登录未完成或登录状态校验失败"
                     return CrawlResult([], CRAWL_BLOCKED, f"{pname}: {message}")
 
@@ -421,6 +426,7 @@ class CrawlerEngine:
         stop_event: Optional[Event],
         page_callback,
         login_confirmation,
+        credentials: Optional[Credentials] = None,
     ) -> CrawlResult:
         """猎聘：浏览器会话 + pc-search-job 接口翻页。"""
         event = stop_event or Event()
@@ -434,15 +440,21 @@ class CrawlerEngine:
                 "liepin", login_confirmation, log_callback, pname,
             )
             install_liepin_capture_hook(driver)
+            creds = resolve_credentials("liepin", credentials)
+            ensure_liepin_session(
+                driver, event, creds, login_confirmation, log_callback,
+            )
             if not navigate_to_liepin_search(
                 driver, keyword, city_name, city_code, page=1, log=log_callback,
+                stop_event=event,
+                credentials=creds,
+                login_confirmation=login_confirmation,
             ):
                 return CrawlResult(
                     [],
                     CRAWL_BLOCKED,
                     f"{pname} 未能获取职位数据。"
-                    f"请在 Chrome 手动搜索关键词（无需登录）；"
-                    f"若出现登录页请点后退，不要登录。"
+                    f"请在 .credentials.json 配置猎聘账号，或在 Chrome 手动搜索。"
                     f"当前：{driver.title}",
                 )
 
