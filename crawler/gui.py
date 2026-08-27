@@ -30,8 +30,12 @@ class CrawlerApp:
     """招聘平台公司信息查询 GUI 主程序"""
 
     PLACEHOLDER_TEXT = "请输入搜索关键词，如：Python开发"
-    PLACEHOLDER_FG   = "#B0B8C1"
-    ENTRY_NORMAL_FG  = "#2C3E50"
+    PLACEHOLDER_FG = "#94A3B8"
+    ENTRY_NORMAL_FG = "#0F172A"
+    SURFACE = "#FFFFFF"
+    SURFACE_SOFT = "#F8FAFC"
+    BORDER = "#E2E8F0"
+    BRAND_DARK = "#0F3D75"
 
     def __init__(self):
         self.engine = CrawlerEngine()
@@ -47,19 +51,21 @@ class CrawlerApp:
         self._boss_credentials = None
         self._boss_logged_in = False
         self._login_dialog = None
+        self._pending_rows: List[CompanyInfo] = []
+        self._flush_after_id = None
 
         self.root = tk.Tk()
         self.root.title("招聘平台公司信息查询")
-        self.root.geometry("1100x720")
-        self.root.minsize(900, 600)
+        self.root.geometry("1180x760")
+        self.root.minsize(980, 640)
         self.root.configure(bg=BG)
 
         self.root.update_idletasks()
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
-        x = (sw - 1100) // 2
-        y = (sh - 720) // 2
-        self.root.geometry(f"1100x720+{x}+{y}")
+        x = (sw - 1180) // 2
+        y = (sh - 760) // 2
+        self.root.geometry(f"1180x760+{x}+{y}")
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self._init_fonts()
@@ -84,15 +90,24 @@ class CrawlerApp:
     def _setup_styles(self):
         style = ttk.Style()
         style.theme_use("clam")
-        style.configure("Treeview",
-                        background=CARD_BG, fieldbackground=CARD_BG,
-                        font=self.FONT_11, rowheight=30)
-        style.configure("Treeview.Heading",
-                        font=self.FONT_BOLD_11,
-                        background="#E8EEF4", foreground=TEXT_DARK)
+        style.configure(
+            "Treeview", background=self.SURFACE, fieldbackground=self.SURFACE,
+            foreground=TEXT_DARK, font=self.FONT_11, rowheight=34,
+            borderwidth=0, relief="flat",
+        )
+        style.configure(
+            "Treeview.Heading", font=self.FONT_BOLD_11,
+            background="#EEF4FF", foreground=self.BRAND_DARK,
+            borderwidth=0, relief="flat", padding=(12, 10),
+        )
         style.map("Treeview",
-                  background=[("selected", "#D5E8FF")],
-                  foreground=[("selected", PRIMARY)])
+                  background=[("selected", "#DCEBFF")],
+                  foreground=[("selected", self.BRAND_DARK)])
+        style.configure(
+            "Horizontal.TProgressbar", troughcolor="#E2E8F0",
+            background=PRIMARY, lightcolor=PRIMARY, darkcolor=PRIMARY,
+            bordercolor="#E2E8F0", thickness=7,
+        )
         self._cb_off, self._cb_on = self._make_checkbox_images(24)
 
     def _make_checkbox_images(self, size: int):
@@ -135,143 +150,161 @@ class CrawlerApp:
         return tk.Label(parent, **kw)
 
     def _build_header(self):
-        header = tk.Frame(self.root, bg=PRIMARY, height=56)
+        header = tk.Frame(self.root, bg=PRIMARY, height=82)
         header.pack(fill=tk.X)
         header.pack_propagate(False)
 
-        self._make_label(
-            header, text="招聘平台公司信息查询",
-            font=self.FONT_BOLD_18, bg=PRIMARY, fg="white",
-        ).pack(side=tk.LEFT, padx=20, pady=12)
+        title_box = tk.Frame(header, bg=PRIMARY)
+        title_box.pack(side=tk.LEFT, padx=28, pady=13)
+        self._make_label(title_box, text="招聘数据采集中心",
+                         font=self.FONT_BOLD_18, bg=PRIMARY, fg="white").pack(anchor=tk.W)
+        self._make_label(title_box, text="跨平台职位与公司信息聚合",
+                         font=self.FONT_10, bg=PRIMARY, fg="#DCEBFF").pack(anchor=tk.W, pady=(2, 0))
 
         self.status_label = self._make_label(
-            header, text="就绪",
-            font=self.FONT_12, bg=PRIMARY, fg="#D5E8FF",
+            header, text="●  就绪",
+            font=self.FONT_BOLD_11, bg="#2E73BE", fg="white", padx=14, pady=7,
         )
-        self.status_label.pack(side=tk.RIGHT, padx=20)
+        self.status_label.pack(side=tk.RIGHT, padx=28)
 
     def _build_control_panel(self):
-        panel = tk.Frame(self.root, bg=CARD_BG)
-        panel.pack(fill=tk.X, padx=16, pady=(12, 4))
+        panel = tk.Frame(self.root, bg=self.SURFACE, highlightbackground=self.BORDER,
+                         highlightthickness=1)
+        panel.pack(fill=tk.X, padx=22, pady=(18, 10))
 
-        # ── 平台选择 ──
-        pf = tk.LabelFrame(
-            panel, text="选择平台",
-            font=self.FONT_BOLD_15,
-            bg=CARD_BG, fg=TEXT_DARK, padx=16, pady=14,
-            labelanchor="nw",
-        )
-        pf.pack(fill=tk.X, padx=12, pady=(10, 6))
+        heading = tk.Frame(panel, bg=self.SURFACE)
+        heading.pack(fill=tk.X, padx=22, pady=(16, 8))
+        self._make_label(heading, text="检索设置", font=self.FONT_BOLD_15,
+                         bg=self.SURFACE, fg=TEXT_DARK).pack(side=tk.LEFT)
+        self._make_label(heading, text="选择平台、关键词和目标地区后开始采集",
+                         font=self.FONT_10, bg=self.SURFACE, fg=TEXT_LIGHT).pack(side=tk.LEFT, padx=12, pady=(4, 0))
 
-        for key, info in PLATFORMS.items():
+        platform_box = tk.Frame(panel, bg=self.SURFACE_SOFT, highlightbackground=self.BORDER,
+                                highlightthickness=1)
+        platform_box.pack(fill=tk.X, padx=22, pady=(0, 12))
+        self._make_label(platform_box, text="数据源", font=self.FONT_BOLD_11,
+                         bg=self.SURFACE_SOFT, fg=TEXT_DARK).grid(row=0, column=0, padx=(14, 10), pady=12, sticky=tk.W)
+
+        for index, (key, info) in enumerate(PLATFORMS.items(), start=1):
             var = tk.BooleanVar(value=False)
             self.platform_vars[key] = var
             cb = tk.Checkbutton(
-                pf, text=info["name"], variable=var,
-                font=self.FONT_15, bg=CARD_BG,
-                activebackground=CARD_BG, selectcolor=CARD_BG,
+                platform_box, text=info["name"], variable=var,
+                font=self.FONT_BOLD_11, bg=self.SURFACE_SOFT,
+                activebackground=self.SURFACE_SOFT, selectcolor=self.SURFACE_SOFT,
                 fg=info["color"],
                 image=self._cb_off, selectimage=self._cb_on,
                 compound=tk.LEFT, indicatoron=False,
                 bd=0, highlightthickness=0, relief=tk.FLAT,
-                padx=6, pady=4, cursor="hand2",
+                padx=4, pady=4, cursor="hand2", anchor=tk.W,
             )
-            cb.pack(side=tk.LEFT, padx=(0, 24))
+            cb.grid(row=0, column=index, padx=(0, 12), pady=7, sticky=tk.W)
             if key == "boss" and info.get("requires_login"):
                 self._boss_login_label = self._make_label(
-                    pf, text="需登录", font=self.FONT_BOLD_12,
-                    fg="#E67E22", bg=CARD_BG, cursor="hand2",
+                    platform_box, text="登录设置", font=self.FONT_BOLD_10,
+                    fg="#C2410C", bg="#FFF7ED", cursor="hand2", padx=8, pady=4,
                 )
-                self._boss_login_label.pack(side=tk.LEFT, padx=(0, 24))
+                self._boss_login_label.grid(row=1, column=index, padx=(8, 0), pady=(0, 8), sticky=tk.W)
                 self._boss_login_label.bind(
                     "<Button-1>", lambda e: self._open_login_settings()
                 )
 
-        btn_frame = tk.Frame(pf, bg=CARD_BG)
-        btn_frame.pack(side=tk.LEFT)
+        btn_frame = tk.Frame(platform_box, bg=self.SURFACE_SOFT)
+        btn_frame.grid(row=0, column=len(PLATFORMS) + 2, padx=(4, 14), pady=7, sticky=tk.E)
         tk.Button(
             btn_frame, text="全选", font=self.FONT_12,
-            command=self._select_all, bg="#EBF5FB", relief=tk.FLAT,
-            cursor="hand2", padx=10, pady=4,
-        ).pack(side=tk.LEFT, padx=(12, 4))
+            command=self._select_all, bg="#E7F0FF", fg=self.BRAND_DARK, relief=tk.FLAT,
+            cursor="hand2", padx=10, pady=4, activebackground="#D7E7FF",
+        ).pack(side=tk.LEFT, padx=(0, 4))
         tk.Button(
-            btn_frame, text="全不选", font=self.FONT_12,
-            command=self._deselect_all, bg="#EBF5FB", relief=tk.FLAT,
-            cursor="hand2", padx=10, pady=4,
+            btn_frame, text="清空", font=self.FONT_12,
+            command=self._deselect_all, bg="#F1F5F9", fg=TEXT_DARK, relief=tk.FLAT,
+            cursor="hand2", padx=10, pady=4, activebackground="#E2E8F0",
         ).pack(side=tk.LEFT, padx=4)
 
-        # ── 搜索栏 ──
-        sf = tk.Frame(panel, bg=CARD_BG)
-        sf.pack(fill=tk.X, padx=12, pady=(8, 12))
+        sf = tk.Frame(panel, bg=self.SURFACE)
+        sf.pack(fill=tk.X, padx=22, pady=(0, 18))
 
         self._make_label(
-            sf, text="搜索关键词：", font=self.FONT_15,
-            bg=CARD_BG, fg=TEXT_DARK,
-        ).pack(side=tk.LEFT)
+            sf, text="关键词", font=self.FONT_BOLD_11,
+            bg=self.SURFACE, fg=TEXT_DARK,
+        ).pack(side=tk.LEFT, padx=(0, 8))
 
         self.keyword_entry = tk.Entry(
-            sf, font=self.FONT_16, width=30,
-            relief=tk.SOLID, bd=1, fg=self.PLACEHOLDER_FG,
+            sf, font=self.FONT_13, width=34,
+            relief=tk.FLAT, bd=0, fg=self.PLACEHOLDER_FG,
+            bg=self.SURFACE_SOFT, highlightbackground=self.BORDER,
+            highlightcolor=PRIMARY, highlightthickness=1,
         )
         self.keyword_entry.insert(0, self.PLACEHOLDER_TEXT)
-        self.keyword_entry.pack(side=tk.LEFT, padx=(6, 14), ipady=6)
+        self.keyword_entry.pack(side=tk.LEFT, padx=(0, 20), ipady=10)
         self.keyword_entry.bind("<FocusIn>", self._on_focus_in)
         self.keyword_entry.bind("<FocusOut>", self._on_focus_out)
         self.keyword_entry.bind("<Return>", lambda e: self._start_crawl())
 
         self._make_label(
-            sf, text="地区：", font=self.FONT_15,
-            bg=CARD_BG, fg=TEXT_DARK,
-        ).pack(side=tk.LEFT)
+            sf, text="地区", font=self.FONT_BOLD_11,
+            bg=self.SURFACE, fg=TEXT_DARK,
+        ).pack(side=tk.LEFT, padx=(0, 8))
 
         self.city_names = list(CITIES.keys())
         self.city_var = tk.StringVar(value="北京")
         self.city_combo = ttk.Combobox(
             sf, textvariable=self.city_var, values=self.city_names,
-            font=self.FONT_15, width=7, state="readonly",
+            font=self.FONT_12, width=8, state="readonly",
         )
-        self.city_combo.pack(side=tk.LEFT, padx=(6, 14), ipady=4)
+        self.city_combo.pack(side=tk.LEFT, padx=(0, 18), ipady=7)
 
         self.crawl_btn = tk.Button(
-            sf, text="开始查询", font=self.FONT_BOLD_14,
-            bg=PRIMARY, fg="white", activebackground="#3A7BC8",
-            relief=tk.FLAT, padx=22, pady=6, cursor="hand2",
+            sf, text="开始采集", font=self.FONT_BOLD_12,
+            bg=PRIMARY, fg="white", activebackground="#357CC3",
+            relief=tk.FLAT, padx=20, pady=10, cursor="hand2",
             command=self._start_crawl,
         )
         self.crawl_btn.pack(side=tk.LEFT, padx=(0, 10))
 
         self.stop_btn = tk.Button(
-            sf, text="停止", font=self.FONT_BOLD_13,
+            sf, text="停止", font=self.FONT_BOLD_11,
             bg=DANGER, fg="white", activebackground="#C0392B",
-            relief=tk.FLAT, padx=16, pady=6, cursor="hand2",
+            relief=tk.FLAT, padx=15, pady=10, cursor="hand2",
             state=tk.DISABLED, command=self._stop_crawl,
         )
         self.stop_btn.pack(side=tk.LEFT, padx=(0, 10))
 
         self.export_btn = tk.Button(
-            sf, text="导出结果", font=self.FONT_13,
+            sf, text="导出数据", font=self.FONT_BOLD_11,
             bg=ACCENT, fg="white", activebackground="#219A52",
-            relief=tk.FLAT, padx=16, pady=6, cursor="hand2",
+            relief=tk.FLAT, padx=15, pady=10, cursor="hand2",
             command=self._export,
         )
         self.export_btn.pack(side=tk.LEFT)
 
     def _build_result_area(self):
-        container = tk.Frame(self.root, bg=BG)
-        container.pack(fill=tk.BOTH, expand=True, padx=16, pady=(4, 4))
+        container = tk.Frame(self.root, bg=self.SURFACE, highlightbackground=self.BORDER,
+                             highlightthickness=1)
+        container.pack(fill=tk.BOTH, expand=True, padx=22, pady=(0, 12))
 
-        self.info_label = self._make_label(
-            container, text="尚未查询，请选择平台并点击开始查询",
-            font=self.FONT_11, bg=BG, fg=TEXT_LIGHT,
+        result_header = tk.Frame(container, bg=self.SURFACE)
+        result_header.pack(fill=tk.X, padx=20, pady=(15, 8))
+        self._make_label(result_header, text="采集结果", font=self.FONT_BOLD_15,
+                         bg=self.SURFACE, fg=TEXT_DARK).pack(side=tk.LEFT)
+        self.result_count_label = self._make_label(
+            result_header, text="0 条记录", font=self.FONT_BOLD_10,
+            bg="#E7F0FF", fg=self.BRAND_DARK, padx=9, pady=4,
         )
-        self.info_label.pack(anchor=tk.W, pady=(4, 2))
+        self.result_count_label.pack(side=tk.LEFT, padx=10)
+        self.info_label = self._make_label(
+            result_header, text="尚未查询，请配置检索条件后开始采集",
+            font=self.FONT_10, bg=self.SURFACE, fg=TEXT_LIGHT,
+        )
+        self.info_label.pack(side=tk.RIGHT, pady=(4, 0))
 
         columns = ("platform", "name", "industry", "scale", "location",
                    "contact_person", "contact_info")
         col_names = ("平台", "公司名称", "行业", "规模", "地点", "联系人", "联系方式")
 
-        tree_frame = tk.Frame(container, bg=CARD_BG)
-        tree_frame.pack(fill=tk.BOTH, expand=True)
+        tree_frame = tk.Frame(container, bg=self.BORDER)
+        tree_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 18))
 
         self.tree = ttk.Treeview(
             tree_frame, columns=columns, show="headings",
@@ -286,6 +319,8 @@ class CrawlerApp:
         vsb = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.tree.yview)
         hsb = ttk.Scrollbar(tree_frame, orient=tk.HORIZONTAL, command=self.tree.xview)
         self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        self.tree.tag_configure("even", background="#FFFFFF")
+        self.tree.tag_configure("odd", background="#F8FAFC")
 
         self.tree.grid(row=0, column=0, sticky="nsew")
         vsb.grid(row=0, column=1, sticky="ns")
@@ -295,14 +330,15 @@ class CrawlerApp:
         self.tree.bind("<Double-1>", self._show_detail)
 
     def _build_footer(self):
-        footer = tk.Frame(self.root, bg="#E8EEF4", height=28)
+        footer = tk.Frame(self.root, bg="#EAF1FA", height=34)
         footer.pack(fill=tk.X, side=tk.BOTTOM)
         footer.pack_propagate(False)
-        self.progress = ttk.Progressbar(footer, mode="determinate", length=200)
-        self.progress.pack(side=tk.LEFT, padx=12, pady=4)
+        self.progress = ttk.Progressbar(footer, style="Horizontal.TProgressbar",
+                                        mode="determinate", length=210)
+        self.progress.pack(side=tk.LEFT, padx=22, pady=8)
         self.progress_label = self._make_label(
-            footer, text="", font=self.FONT_10,
-            bg="#E8EEF4", fg=TEXT_LIGHT,
+            footer, text="等待开始", font=self.FONT_10,
+            bg="#EAF1FA", fg=TEXT_LIGHT,
         )
         self.progress_label.pack(side=tk.LEFT, padx=4)
 
@@ -318,12 +354,12 @@ class CrawlerApp:
 
     def _set_boss_logged_in(self):
         self._boss_logged_in = True
-        self._boss_login_label.config(text="已登录", fg="#27AE60")
+        self._boss_login_label.config(text="已登录", fg="#15803D", bg="#DCFCE7")
 
     def _reset_boss_login_status(self):
         self._boss_logged_in = False
         self._boss_credentials = None
-        self._boss_login_label.config(text="需登录", fg="#E67E22")
+        self._boss_login_label.config(text="登录设置", fg="#C2410C", bg="#FFF7ED")
 
     # ──────────── 浏览器登录 ────────────
 
@@ -530,14 +566,20 @@ class CrawlerApp:
         if "boss" in selected and self._boss_credentials is None and not self._boss_logged_in:
             from .accounts import load_platform_credentials
             self._boss_credentials = load_platform_credentials("boss") or Credentials()
-        self.crawl_btn.config(state=tk.DISABLED, text="查询中...")
+        self.crawl_btn.config(state=tk.DISABLED, text="采集中...")
         self.stop_btn.config(state=tk.NORMAL)
-        self.status_label.config(text=f"查询中  {city_name}...")
+        self.status_label.config(text=f"●  正在采集 · {city_name}", bg="#2563A8")
         self.info_label.config(text=f"正在准备查询  |  关键词：{keyword}  |  地区：{city_name}")
         self.progress_label.config(text="")
         self.results.clear()
-        for item in self.tree.get_children():
-            self.tree.delete(item)
+        self._pending_rows.clear()
+        if self._flush_after_id is not None:
+            self.root.after_cancel(self._flush_after_id)
+            self._flush_after_id = None
+        items = self.tree.get_children()
+        if items:
+            self.tree.delete(*items)
+        self._update_result_count()
 
         self.progress["maximum"] = len(selected)
         self.progress["value"] = 0
@@ -591,7 +633,7 @@ class CrawlerApp:
         self._crawl_stop = True
         self._stop_event.set()
         self._login_cancel_event.set()
-        self.status_label.config(text="中止中...")
+        self.status_label.config(text="●  正在停止...", bg="#B45309")
         self.stop_btn.config(state=tk.DISABLED)
 
     def _on_page_collected(self, platform_name, page, data, total):
@@ -603,18 +645,33 @@ class CrawlerApp:
     def _handle_page_data(self, platform_name, page, data, total):
         self.results.extend(data)
         self._append_rows(data)
+        self._update_result_count()
         self.info_label.config(
             text=f"{platform_name}  第 {page} 页新增 {len(data)} 条  |  当前平台累计 {total} 条"
         )
         self.progress_label.config(text=f"{platform_name} · 第 {page} 页 · 累计 {total} 条")
 
     def _append_rows(self, data: List[CompanyInfo]):
-        tree = self.tree
-        for c in data:
-            tree.insert("", tk.END, values=(
+        self._pending_rows.extend(data)
+        if self._flush_after_id is None:
+            self._flush_after_id = self.root.after(16, self._flush_pending_rows)
+
+    def _flush_pending_rows(self):
+        """分批插入表格，避免一次渲染大量数据时冻结界面。"""
+        self._flush_after_id = None
+        batch = self._pending_rows[:200]
+        del self._pending_rows[:200]
+        start_index = len(self.tree.get_children())
+        for index, c in enumerate(batch, start=start_index):
+            self.tree.insert("", tk.END, tags=("even" if index % 2 == 0 else "odd",), values=(
                 c.platform, c.name, c.industry, c.scale, c.location,
                 c.contact_person, c.contact_info,
             ))
+        if self._pending_rows:
+            self._flush_after_id = self.root.after(1, self._flush_pending_rows)
+
+    def _update_result_count(self):
+        self.result_count_label.config(text=f"{len(self.results)} 条记录")
 
     def _update_progress(self, current, total):
         self.progress["value"] = current
@@ -622,7 +679,7 @@ class CrawlerApp:
 
     def _crawl_done(self, stopped=False, statuses=None):
         self._crawl_in_progress = False
-        self.crawl_btn.config(state=tk.NORMAL, text="开始查询")
+        self.crawl_btn.config(state=tk.NORMAL, text="开始采集")
         self.stop_btn.config(state=tk.DISABLED)
         n = len(self.results)
         statuses = statuses or []
@@ -632,7 +689,7 @@ class CrawlerApp:
 
         if stopped:
             self.info_label.config(text=f"查询已中止  |  已获取 {n} 条")
-            self.status_label.config(text="已中止")
+            self.status_label.config(text="●  已中止", bg="#B45309")
             self.progress_label.config(text="已中止")
         elif statuses:
             ok_count = sum(1 for s, _ in statuses if s == "ok")
@@ -641,7 +698,7 @@ class CrawlerApp:
             if blocked_count:
                 summary += f"  {ok_count} 平台成功，{blocked_count} 平台被拦截"
             self.info_label.config(text=summary)
-            self.status_label.config(text="查询完成")
+            self.status_label.config(text="●  采集完成", bg="#15803D")
             self.progress_label.config(text="全部完成")
 
             blocked_msgs = [msg for st, msg in statuses if st == "blocked"]
