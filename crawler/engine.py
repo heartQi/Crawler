@@ -891,13 +891,23 @@ class CrawlerEngine:
                     log_callback(f"[验证检测] 标题匹配 '{kw}'")
                 return True
 
+        # 结果卡片已恢复时，页面中残留的隐藏验证 iframe 或失败文案不应继续
+        # 被判定为拦截页。
+        try:
+            items = driver.find_elements(By.CSS_SELECTOR, cfg.get("item_css", ""))
+            if any(item.is_displayed() for item in items):
+                return False
+        except WebDriverException:
+            pass
+
         captcha_css = cfg.get("captcha_css", "")
         if captcha_css:
             try:
-                if driver.find_elements(By.CSS_SELECTOR, captcha_css):
-                    if log_callback:
-                        log_callback("[验证检测] 发现验证组件")
-                    return True
+                for element in driver.find_elements(By.CSS_SELECTOR, captcha_css):
+                    if element.is_displayed():
+                        if log_callback:
+                            log_callback("[验证检测] 发现验证组件")
+                        return True
             except WebDriverException:
                 pass
 
@@ -964,17 +974,15 @@ class CrawlerEngine:
                     f"若提示失败请先点刷新再重试"
                 )
             else:
-                log_callback(f"[{pname}] 验证仍未通过（第 {round_i + 1}/{max_rounds} 次）...")
+                log_callback(
+                    f"[{pname}] 验证仍未通过（第 {round_i + 1}/{max_rounds} 次）。"
+                    "请在浏览器中手动刷新页面后再重试。"
+                )
 
             if not login_confirmation(pname, wait_sec):
                 return False
 
             human_pause(1.5, 2.5)
-            if round_i > 0:
-                try:
-                    safe_get(driver, target_url, log_callback)
-                except (WebDriverException, TimeoutException):
-                    pass
             human_pause(2.0, 3.0)
 
         return not self._detect_captcha(driver, cfg, log_callback)

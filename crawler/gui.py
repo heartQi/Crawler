@@ -23,6 +23,7 @@ from .config import (
 )
 from .models import CompanyInfo
 from .engine import CrawlerEngine
+from .parsers import PLATFORM_CONFIG
 
 
 class CrawlerApp:
@@ -339,17 +340,48 @@ class CrawlerApp:
             var.set(False)
 
     def _wait_for_login_confirmation(self, platform_name: str, timeout: int) -> bool:
-        """工作线程等待主线程中的人工登录确认。"""
+        """等待人工确认；拉勾、猎聘验证页恢复后自动继续。"""
         self._login_done_event.clear()
         self._login_cancel_event.clear()
+        if self._captcha_cleared_automatically(platform_name):
+            return True
         self.root.after(0, self._show_login_confirmation, platform_name)
         deadline = time.monotonic() + timeout
+        next_check = time.monotonic() + 1.0
         while time.monotonic() < deadline:
             if self._stop_event.is_set() or self._login_cancel_event.is_set():
                 return False
             if self._login_done_event.wait(0.2):
                 return True
+            if time.monotonic() >= next_check:
+                next_check = time.monotonic() + 1.0
+                if self._captcha_cleared_automatically(platform_name):
+                    self.root.after(0, self._dismiss_login_dialog_after_auto_verify)
+                    return True
         return False
+
+    def _captcha_cleared_automatically(self, platform_name: str) -> bool:
+        """只对可明确检测验证状态的平台启用自动继续。"""
+        platform_key = {"拉勾网": "lagou", "猎聘": "liepin"}.get(platform_name)
+        driver = self.engine._driver
+        if not platform_key or driver is None:
+            return False
+        try:
+            return not CrawlerEngine._detect_captcha(driver, PLATFORM_CONFIG[platform_key])
+        except Exception:
+            return False
+
+    def _dismiss_login_dialog_after_auto_verify(self):
+        """验证通过后由主线程关闭提示框，避免 Tk 跨线程访问。"""
+        dialog = self._login_dialog
+        if dialog and dialog.winfo_exists():
+            try:
+                dialog.grab_release()
+            except tk.TclError:
+                pass
+            dialog.destroy()
+        self._login_dialog = None
+        self.status_label.config(text="●  验证已通过，继续采集", bg="#15803D")
 
     def _show_login_confirmation(self, platform_name: str):
         if self._login_dialog and self._login_dialog.winfo_exists():
@@ -375,7 +407,7 @@ class CrawlerApp:
             dlg,
             text="程序已打开普通 Chrome（无「自动化控制」提示）。\n"
                  "请在该窗口完成滑块/安全验证；若失败请先点浏览器刷新再重试。\n"
-                 "确认页面正常显示后，再点击「已完成」。",
+                 "验证通过后会自动继续；若未自动继续，也可点击「已完成」。",
             font=self.FONT_10, bg=CARD_BG, fg=TEXT_LIGHT,
             justify=tk.LEFT,
         ).pack(padx=24)
@@ -387,11 +419,13 @@ class CrawlerApp:
             self._login_done_event.set()
             self.status_label.config(text="验证已确认，查询中...")
             dlg.destroy()
+            self._login_dialog = None
 
         def cancel():
             self._login_cancel_event.set()
             self.status_label.config(text="就绪")
             dlg.destroy()
+            self._login_dialog = None
 
         tk.Button(
             buttons, text="已完成", command=done,

@@ -126,6 +126,19 @@ class CrawlerUnitTests(unittest.TestCase):
         )
         self.assertFalse(moved)
 
+    def test_captcha_detection_ignores_hidden_widget_after_results_render(self):
+        driver = FakeDriver()
+        driver.title = "拉勾网"
+        driver.elements[".job"] = [FakeElement("职位卡片")]
+        driver.elements[".captcha"] = [FakeElement(displayed=False)]
+        cfg = {
+            "item_css": ".job",
+            "captcha_css": ".captcha",
+            "captcha_body_keywords": ["验证失败"],
+        }
+
+        self.assertFalse(CrawlerEngine._detect_captcha(driver, cfg))
+
 
 if __name__ == "__main__":
     unittest.main()
