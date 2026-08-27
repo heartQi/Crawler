@@ -532,6 +532,18 @@ def format_lagou_error(data: Optional[dict]) -> str:
     return data.get("error") or data.get("parseError") or "接口返回失败"
 
 
+def extract_lagou_ajax_result(data: Optional[dict]) -> tuple[list, int, int]:
+    """解析 Ajax 响应，返回 (职位列表, 总页数, 每页条数)。"""
+    if not data or not data.get("success"):
+        return [], 0, 0
+    pr = data.get("content", {}).get("positionResult", {}) or {}
+    positions = pr.get("result") or []
+    total = int(pr.get("totalCount") or 0)
+    page_size = int(pr.get("pageSize") or 15) or 15
+    total_pages = (total + page_size - 1) // page_size if total else 0
+    return positions, total_pages, page_size
+
+
 def fetch_lagou_page(
     driver,
     keyword: str,

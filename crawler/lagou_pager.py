@@ -24,35 +24,42 @@ LAGOU_LIST_ITEM_CSS = (
 )
 
 _READ_PAGE_JS = """
-const root = document.querySelector('.pager_container');
-if (!root) return 0;
-
-const cur = root.querySelector('.pager_current, span.pager_current');
-if (cur) {
-  const val = (cur.getAttribute('action') || cur.textContent || '').trim();
-  if (/^\\d+$/.test(val)) return parseInt(val, 10);
+let root = document.querySelector('.pager_container');
+if (root) {
+  const cur = root.querySelector('.pager_current, span.pager_current');
+  if (cur) {
+    const val = (cur.getAttribute('action') || cur.textContent || '').trim();
+    if (/^\\d+$/.test(val)) return parseInt(val, 10);
+  }
+  const spans = root.querySelectorAll('span.page_no, span[action]');
+  for (const s of spans) {
+    const action = (s.getAttribute('action') || '').trim();
+    if (!/^\\d+$/.test(action)) continue;
+    const cls = (s.className || '').toLowerCase();
+    if (cls.includes('current') || cls.includes('active')) return parseInt(action, 10);
+  }
 }
-
-const spans = root.querySelectorAll('span.page_no, span[action]');
-for (const s of spans) {
-  const action = (s.getAttribute('action') || '').trim();
-  if (!/^\\d+$/.test(action)) continue;
-  const cls = (s.className || '').toLowerCase();
-  if (cls.includes('current') || cls.includes('active')) {
-    return parseInt(action, 10);
-  }
-  const st = window.getComputedStyle(s);
-  const bg = st.backgroundColor || '';
-  const color = st.color || '';
-  if (bg.includes('179, 138') || bg.includes('0, 179')) {
-    return parseInt(action, 10);
-  }
-  if (color === 'rgb(255, 255, 255)' && bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') {
-    return parseInt(action, 10);
+const ant = document.querySelector('.ant-pagination, [class*="Pagination"], [class*="pagination"]');
+if (ant) {
+  const active = ant.querySelector(
+    '.ant-pagination-item-active, [class*="active"][class*="page"], li.active, .current'
+  );
+  if (active) {
+    const t = (active.textContent || active.innerText || '').trim();
+    if (/^\\d+$/.test(t)) return parseInt(t, 10);
   }
 }
 return 0;
 """
+
+LAGOU_PAGER_CSS = (
+    ".pager_container",
+    ".ant-pagination",
+    "[class*='Pagination']",
+    "[class*='pagination']",
+    ".lg-page",
+    "[class*='pager']",
+)
 
 
 def scroll_lagou_list_to_top(driver) -> None:
@@ -131,6 +138,17 @@ def lagou_position_signature(items: Iterable) -> tuple:
     return tuple(keys)
 
 
+def lagou_has_pager(driver) -> bool:
+    for sel in LAGOU_PAGER_CSS:
+        try:
+            for el in driver.find_elements(By.CSS_SELECTOR, sel):
+                if el.is_displayed():
+                    return True
+        except WebDriverException:
+            continue
+    return False
+
+
 def read_lagou_total_pages(driver) -> int:
     selectors = (".totalNum", "span.totalNum", "[class*='totalNum']")
     for sel in selectors:
@@ -201,6 +219,11 @@ def _find_lagou_next_button(driver):
         (By.XPATH, "//div[contains(@class,'pager_container')]//span[@action='next']"),
         (By.CSS_SELECTOR, ".pager_container .pager_next"),
         (By.CSS_SELECTOR, ".pager_next"),
+        (By.CSS_SELECTOR, ".ant-pagination-next:not(.ant-pagination-disabled)"),
+        (By.CSS_SELECTOR, "[class*='pagination'] .next:not(.disabled)"),
+        (By.CSS_SELECTOR, ".lg-page-item.next:not(.disabled)"),
+        (By.XPATH, "//button[contains(@aria-label,'下一页') and not(@disabled)]"),
+        (By.XPATH, "//li[contains(@class,'next') and not(contains(@class,'disabled'))]"),
     )
     for by, selector in strategies:
         try:
@@ -227,6 +250,16 @@ def _find_lagou_page_button(driver, page_num: int):
             By.XPATH,
             f"//div[contains(@class,'pager_container')]//span["
             f"@action='{page_num}' or normalize-space(text())='{page_num}']",
+        ),
+        (
+            By.XPATH,
+            f"//li[contains(@class,'ant-pagination-item') and "
+            f"normalize-space(text())='{page_num}']",
+        ),
+        (
+            By.XPATH,
+            f"//*[contains(@class,'pagination') or contains(@class,'pager')]"
+            f"//*[normalize-space(text())='{page_num}']",
         ),
     )
     for by, selector in strategies:

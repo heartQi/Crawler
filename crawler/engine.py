@@ -46,6 +46,7 @@ from .lagou_api import (
     build_lagou_company_lookup,
     build_wn_search_url,
     enrich_lagou_companies,
+    extract_lagou_ajax_result,
     fetch_lagou_page_with_retry,
     format_lagou_error,
     navigate_to_lagou_search,
@@ -68,6 +69,7 @@ from .liepin_api import (
 from .lagou_pager import (
     find_current_page_lagou_items,
     go_next_lagou_page,
+    lagou_has_pager,
     lagou_position_signature,
     read_lagou_current_page,
     read_lagou_total_pages,
@@ -651,8 +653,11 @@ class CrawlerEngine:
 
             total_pages = read_lagou_total_pages(driver)
             page_limit = min(MAX_PAGES, total_pages or 30)
+            use_ajax_paging = False
             if total_pages:
                 log_callback(f"[{pname}] 页面显示共 {total_pages} 页")
+            elif not lagou_has_pager(driver):
+                log_callback(f"[{pname}] 新版页面无经典分页条，将使用接口翻页")
 
             last_signature = None
             completed_pages = 0
@@ -703,10 +708,14 @@ class CrawlerEngine:
                         )
                 elif page == 1:
                     log_callback(f"[{pname}] 页面未渲染卡片，接口加载第 1 页...")
-                    page_data = self._lagou_fetch_via_ajax(
+                    page_data, ajax_total = self._lagou_fetch_via_ajax(
                         driver, keyword, city_name, list_url, 1, seen,
                         log_callback, contact_search_visited, stop_check,
                     )
+                    if ajax_total:
+                        page_limit = min(MAX_PAGES, ajax_total)
+                        log_callback(f"[{pname}] 接口显示共 {ajax_total} 页")
+                    use_ajax_paging = True
                 else:
                     log_callback(f"[{pname}] 第 {page} 页未找到职位卡片")
                     break
@@ -737,8 +746,49 @@ class CrawlerEngine:
                 if count > 0 and len(results) >= count:
                     break
 
+                def _fetch_ajax_pages(from_page: int) -> None:
+                    nonlocal completed_pages, page_limit, results
+                    for next_p in range(from_page, page_limit + 1):
+                        if event.is_set() or stop_check():
+                            break
+                        if count > 0 and len(results) >= count:
+                            break
+                        delay = random.uniform(6, 10)
+                        log_callback(
+                            f"[{pname}] 接口翻页第 {next_p} 页（间隔 {delay:.0f} 秒）..."
+                        )
+                        time.sleep(delay)
+                        ap_data, ajax_total = self._lagou_fetch_via_ajax(
+                            driver, keyword, city_name, list_url, next_p, seen,
+                            log_callback, contact_search_visited, stop_check,
+                        )
+                        if ajax_total:
+                            page_limit = min(MAX_PAGES, ajax_total)
+                        if not ap_data:
+                            log_callback(f"[{pname}] 接口第 {next_p} 页无数据，停止翻页")
+                            break
+                        results.extend(ap_data)
+                        completed_pages = next_p
+                        log_callback(
+                            f"[{pname}] 第 {next_p} 页新增 {len(ap_data)} 家，"
+                            f"累计 {len(results)} 家"
+                        )
+                        if page_callback:
+                            page_callback(pname, next_p, ap_data, len(results))
+                        if count > 0 and len(results) >= count:
+                            results = results[:count]
+                            break
+
+                if use_ajax_paging or not lagou_has_pager(driver):
+                    _fetch_ajax_pages(page + 1)
+                    break
+
                 new_page = go_next_lagou_page(driver, page, last_signature or (), log_callback)
                 if new_page <= page:
+                    if completed_pages >= 1:
+                        log_callback(f"[{pname}] 浏览器翻页失败，改用接口翻页...")
+                        _fetch_ajax_pages(page + 1)
+                        break
                     synced = sync_lagou_page_from_browser(driver, page)
                     if synced > page:
                         log_callback(f"[{pname}] 浏览器已在第 {synced} 页，继续采集...")
@@ -859,7 +909,7 @@ class CrawlerEngine:
         contact_search_visited: set,
         stop_check: Callable[[], bool],
         max_retries: int = 2,
-    ) -> List[CompanyInfo]:
+    ) -> tuple[List[CompanyInfo], int]:
         try:
             data = fetch_lagou_page_with_retry(
                 driver, keyword, page, city_name, list_url, log_callback,
@@ -867,15 +917,11 @@ class CrawlerEngine:
             )
         except Exception as exc:
             log_callback(f"[拉勾网] Ajax 异常：{exc}")
-            return []
+            return [], 0
         if not data or not data.get("success"):
             log_callback(f"[拉勾网] Ajax 失败：{format_lagou_error(data)}")
-            return []
-        positions = (
-            data.get("content", {})
-            .get("positionResult", {})
-            .get("result", [])
-        )
+            return [], 0
+        positions, total_pages, _ = extract_lagou_ajax_result(data)
         page_data = []
         for item in parse_lagou_positions(positions):
             key = (item.name,)
@@ -886,7 +932,7 @@ class CrawlerEngine:
             item.salary = ""
             page_data.append(item)
         if not page_data:
-            return []
+            return [], total_pages
         lookup = build_lagou_company_lookup(positions)
         enrich_lagou_companies(page_data, lookup)
         fill_contacts_from_company_pages(
@@ -894,7 +940,7 @@ class CrawlerEngine:
             driver.current_url or list_url,
             contact_search_visited, log_callback, stop_check,
         )
-        return page_data
+        return page_data, total_pages
 
     @staticmethod
     def _has_visible_results(driver, cfg) -> bool:
